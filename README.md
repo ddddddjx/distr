@@ -9,9 +9,14 @@
 ## 功能
 
 - 📹 **实时姿态追踪**：手机浏览器内 20-30 FPS 骨骼叠加显示（MediaPipe Pose Landmarker）
+- 🎓 **TPI / PGA 知识体系**：检测规则与反馈内容基于 TPI（Titleist Performance Institute）
+  十二大挥杆特征（Big 12）与 PGA 教学体系（准备姿势标准、动力链顺序、球路法则）；
+  每个问题的报告包含「球路影响 → TPI 身体筛查关联 → 矫正练习」
 - 🔄 **双机位分析**
-  - **正面（Face-on）**：头部晃动、髋部摇摆（Sway）、下杆滑动过多（Slide）、逆向脊柱倾斜、击球区鸡翅膀
-  - **侧面（Down-the-line）**：站姿前倾角、起身/失去脊柱角度、早伸（Early Extension）、头部起伏
+  - **正面（Face-on）**：Sway 摇摆、Slide 滑动、Reverse Spine Angle 逆向脊柱倾斜、
+    Hanging Back 重心滞留、Flat Shoulder Plane 转肩过平、Chicken Wing 鸡翅膀、头部晃动
+  - **侧面（Down-the-line）**：Loss of Posture 起身、Early Extension 早伸、
+    Over-the-Top 由外向内下杆、C-Posture 圆肩驼背、站姿前倾角、头部起伏
 - 🏌️ **挥杆阶段自动切分**：准备 → 上杆 → 顶点 → 下杆 → 击球 → 送杆 → 收杆，无需手动标记
 - ⚡ **实时提示**：挥杆过程中问题即时弹出（红色=严重，黄色=轻微）
 - 📋 **挥杆报告**：每次收杆后自动弹出评分 + 问题清单 + 针对性练习建议
@@ -57,7 +62,25 @@ js/rules.js           问题规则库（阈值、实时提示语、改进建议�
 4. **问题检测**：每个阶段运行对应规则，位移阈值以躯干长度/肩宽归一化（具体阈值见
    `js/rules.js` 与 `js/swingAnalyzer.js`，可按教学标准微调）。
 
+## TPI 十二大挥杆特征覆盖情况
+
+| TPI Big 12 | 检测机位 | 状态 |
+|---|---|---|
+| Loss of Posture 失去姿势 | 侧面 | ✅ |
+| Early Extension 早伸 | 侧面 | ✅ |
+| Over-the-Top 由外向内 | 侧面 | ✅ |
+| C-Posture 圆肩驼背 | 侧面 | ✅ |
+| Sway 摇摆 | 正面 | ✅ |
+| Slide 滑动 | 正面 | ✅ |
+| Reverse Spine Angle 逆向脊柱倾斜 | 正面 | ✅ |
+| Hanging Back 重心滞留 | 正面 | ✅ |
+| Flat Shoulder Plane 转肩过平 | 正面 | ✅ |
+| Chicken Wing 鸡翅膀 | 正面 | ✅ |
+| Casting / Early Release 提前释放 | — | ❌ 需杆身追踪 |
+| S-Posture 骨盆前倾过大 | — | ❌ 需骨盆倾角，2D 关键点不可见 |
+
 > ⚠️ 检测基于 2D 关键点的启发式规则，定位是**练习辅助**，不能替代教练的专业判断。
+> 本应用与 PGA、TPI 无官方关联，规则为基于其公开教学体系的工程实现。
 > 侧面机位请尽量沿目标线摆放，否则脊柱角度估计会有偏差。
 
 ## 后续路线图

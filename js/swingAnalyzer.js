@@ -117,7 +117,7 @@ export class SwingAnalyzer {
         this._collectBaseline(lms, hands, torso, tMs);
         break;
       case PHASE.BACKSWING:
-        this._checkBackswing(lms, torso);
+        this._checkBackswing(lms, torso, hands);
         // 手回升（y 增大）且已明显高于基准 → 到达顶点
         if (
           hands.y < this.baseline.handsY - 0.35 * torso &&
@@ -139,7 +139,7 @@ export class SwingAnalyzer {
         }
         break;
       case PHASE.DOWNSWING:
-        this._checkDownswing(lms, torso);
+        this._checkDownswing(lms, torso, hands);
         // 手回到基准高度附近 → 击球区
         if (hands.y > this.baseline.handsY - 0.15 * torso) {
           this.phase = PHASE.IMPACT;
@@ -221,8 +221,10 @@ export class SwingAnalyzer {
         headX: avg("headX"), headY: avg("headY"),
         spine: avg("spine"), lean: avg("lean"),
         shoulderW: avg("shoulderW"), torso: avg("torso"),
+        // 侧面视角：球的方向 = 准备姿势时手相对髋的方向（用于 OTT 判定）
+        ballDir: Math.sign(avg("handsX") - avg("hipX")) || 1,
       };
-      this._checkAddress();
+      this._checkAddress(lms);
     }
   }
 
@@ -230,6 +232,9 @@ export class SwingAnalyzer {
     this.phase = PHASE.BACKSWING;
     // 上杆时手远离目标 → 反推目标方向（与镜像、左右手均无关）
     this.targetDir = hands.x > this.baseline.handsX ? -1 : 1;
+    // 侧面视角记录上杆手部路径，下杆时对比判定 Over-the-Top
+    this.bsPath = [];
+    this.ottCount = 0;
   }
 
   /* ---------- 各阶段规则检查 ---------- */
@@ -242,16 +247,26 @@ export class SwingAnalyzer {
     this.liveFaults.push(key);
   }
 
-  _checkAddress() {
+  _checkAddress(lms) {
     if (this.view !== "side") return;
     if (this.baseline.spine < 20) this._record("SPINE_TOO_UPRIGHT");
     else if (this.baseline.spine > 50) this._record("SPINE_TOO_BENT");
+    // TPI C-Posture：颈部（耳-肩连线）相对脊柱明显前探 → 圆肩驼背
+    if (lms) {
+      const ear = mid(lms[LM.L_EAR], lms[LM.R_EAR]);
+      const sh = mid(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]);
+      const neckAng =
+        (Math.atan2(Math.abs(ear.x - sh.x), Math.abs(ear.y - sh.y)) * 180) / Math.PI;
+      if (neckAng - this.baseline.spine > 25)
+        this._record("C_POSTURE", neckAng - this.baseline.spine);
+    }
   }
 
-  _checkBackswing(lms, torso) {
+  _checkBackswing(lms, torso, hands) {
     const b = this.baseline;
     if (this.view === "side") {
       this._checkPosture(lms, torso);
+      if (hands) this.bsPath.push({ x: hands.x, y: hands.y });
     } else {
       const headDx = Math.abs(lms[LM.NOSE].x - b.headX);
       if (headDx > 0.45 * b.shoulderW) this._record("HEAD_SWAY", headDx);
@@ -267,15 +282,35 @@ export class SwingAnalyzer {
     // 顶点时上身应略微远离目标；倒向目标 = 逆向脊柱倾斜
     const lean = spineLeanSigned(lms) - this.baseline.lean;
     if (lean * this.targetDir > 6) this._record("REVERSE_SPINE", lean * this.targetDir);
+    // TPI Flat Shoulder Plane：顶点双肩连线应明显倾斜（前导肩低于后肩）
+    const ls = lms[LM.L_SHOULDER], rs = lms[LM.R_SHOULDER];
+    const tilt =
+      (Math.atan2(Math.abs(ls.y - rs.y), Math.abs(ls.x - rs.x) || 1e-6) * 180) / Math.PI;
+    if (tilt < 12) this._record("FLAT_SHOULDER_PLANE", 12 - tilt);
   }
 
-  _checkDownswing(lms, torso) {
+  _checkDownswing(lms, torso, hands) {
     const b = this.baseline;
     if (this.view === "side") {
       this._checkPosture(lms, torso);
       // 早伸：髋部沿水平方向顶出（侧面视角下任一水平方向位移过大）
       const hipDx = Math.abs(mid(lms[LM.L_HIP], lms[LM.R_HIP]).x - b.hipX);
       if (hipDx > 0.22 * b.torso) this._record("EARLY_EXTENSION", hipDx);
+      // TPI Over-the-Top：同一高度上，下杆手部路径比上杆明显更靠球一侧
+      if (hands && this.bsPath.length > 4) {
+        let nearest = null, best = Infinity;
+        for (const p of this.bsPath) {
+          const dy = Math.abs(p.y - hands.y);
+          if (dy < best) { best = dy; nearest = p; }
+        }
+        if (nearest && best < 0.08) {
+          const out = (hands.x - nearest.x) * b.ballDir;
+          if (out > 0.12 * b.torso) {
+            // 连续多帧偏外才判定，避免单帧抖动误报
+            if (++this.ottCount >= 3) this._record("OVER_THE_TOP", out);
+          }
+        }
+      }
     } else {
       // 滑动：髋部向目标方向平移过多
       const hipX = mid(lms[LM.L_HIP], lms[LM.R_HIP]).x;
@@ -289,6 +324,11 @@ export class SwingAnalyzer {
     const s = this.leadSide;
     const elbow = angleAt(lms[s.shoulder], lms[s.elbow], lms[s.wrist]);
     if (elbow < 145) this._record("CHICKEN_WING", 180 - elbow);
+    // TPI Hanging Back：击球时骨盆几乎没有向目标方向移动（重心滞留后脚）
+    const b = this.baseline;
+    const shift =
+      (mid(lms[LM.L_HIP], lms[LM.R_HIP]).x - b.hipX) * this.targetDir;
+    if (shift < 0.05 * b.shoulderW) this._record("HANGING_BACK", 0.05 * b.shoulderW - shift);
   }
 
   /** 侧面通用：起身 / 头部起伏（上杆和下杆都检查） */

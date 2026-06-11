@@ -130,17 +130,26 @@ function showSummary(summary) {
   if (faults.length === 0) {
     body.innerHTML = `<p class="summary-good">🎉 本次挥杆没有检测到明显问题，动作很棒！</p>`;
   } else {
-    body.innerHTML = faults
-      .map(
-        (f) => `
-        <div class="summary-item">
-          <div class="si-title ${f.rule.severity === SEVERITY.BAD ? "bad" : "warn"}">${f.rule.title}</div>
-          <div class="si-advice">${f.rule.advice}</div>
-        </div>`
-      )
-      .join("");
+    body.innerHTML = faults.map(faultCardHtml).join("");
   }
   $("summaryModal").classList.remove("hidden");
+}
+
+// 报告卡片：TPI 特征名 + 球路影响 + 身体筛查原因 + 矫正练习
+function faultCardHtml(f) {
+  const r = f.rule;
+  const cls = r.severity === SEVERITY.BAD ? "bad" : "warn";
+  const drills = (r.drills || [])
+    .map((d) => `<li>${d}</li>`)
+    .join("");
+  return `
+    <div class="summary-item">
+      <div class="si-title ${cls}">${r.title}</div>
+      ${r.tpi ? `<div class="si-tpi">${r.tpi}</div>` : ""}
+      ${r.why ? `<div class="si-block"><span class="si-label">影响</span>${r.why}</div>` : ""}
+      ${r.causes ? `<div class="si-block"><span class="si-label">身体筛查</span>${r.causes}</div>` : ""}
+      ${drills ? `<div class="si-block"><span class="si-label">矫正练习</span><ul class="si-drills">${drills}</ul></div>` : ""}
+    </div>`;
 }
 
 let hintTimer = 0;
