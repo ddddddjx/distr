@@ -1,7 +1,8 @@
-// 应用主控：相机/视频文件双数据源、推理循环、UI 状态与反馈渲染
+// 应用主控：相机/视频文件双数据源、推理循环、语音反馈、UI 状态与渲染
 import { PoseDetector } from "./poseDetector.js";
 import { SwingAnalyzer, PHASE, PHASE_LABEL } from "./swingAnalyzer.js";
 import { RULES, SEVERITY } from "./rules.js";
+import { VoiceCoach } from "./voice.js";
 
 const $ = (id) => document.getElementById(id);
 const video = $("video");
@@ -22,7 +23,11 @@ const state = {
 };
 
 const detector = new PoseDetector();
+const coach = new VoiceCoach();
 let analyzer = new SwingAnalyzer(state.view, state.handedness);
+// 每次挥杆中各问题首次出现瞬间的截图（报告中展示）
+const snapshots = new Map();
+let baselineAnnounced = false;
 
 /* ---------------- 初始化 ---------------- */
 
@@ -146,7 +151,7 @@ async function enterFileMode(file) {
   video.classList.remove("mirrored");
   video.loop = false;
   $("stage").classList.add("file-mode");
-  $("flipBtn").textContent = "🎥 返回相机";
+  $("flipBtn").textContent = "返回相机";
   await new Promise((res) => (video.onloadedmetadata = res));
   resizeOverlay();
   showHint("请确认上方机位选择与视频拍摄角度一致，点「开始分析」", 5000);
@@ -156,7 +161,7 @@ async function enterFileMode(file) {
 async function exitFileMode() {
   stopAnalysis();
   $("stage").classList.remove("file-mode");
-  $("flipBtn").textContent = "🔄 切换镜头";
+  $("flipBtn").textContent = "切换镜头";
   try {
     await openCamera();
     showHint(hintForView(), 3000);
@@ -184,11 +189,36 @@ function loop() {
   const lms = detector.detect(video, now);
   // undefined = 视频没有新帧（文件帧率低于渲染帧率），跳过本次分析
   if (lms !== undefined) {
-    detector.draw(ctx, lms, state.source === "camera" && state.facing === "user");
+    const mirrored = state.source === "camera" && state.facing === "user";
+    detector.draw(ctx, lms, mirrored);
     const { phase, liveFaults, summary } = analyzer.update(lms, now);
     renderPhase(phase);
     renderLiveFaults(liveFaults, phase, lms);
-    if (summary) showSummary(summary);
+
+    // 准备姿势锁定后语音提示开始（仅实时模式）
+    if (!baselineAnnounced && analyzer.baseline) {
+      baselineAnnounced = true;
+      if (state.source === "camera") coach.say("姿势就位，开始挥杆吧", "ready", 2000);
+    }
+    // 实时问题：语音播报 + 截取问题瞬间画面
+    for (const key of liveFaults) {
+      const rule = RULES[key];
+      if (rule?.voice) coach.say(rule.voice, key, 7000);
+      if (lms && !snapshots.has(key)) {
+        const shot = detector.snapshot(video, lms, mirrored);
+        if (shot) snapshots.set(key, shot);
+      }
+    }
+    if (summary) {
+      coach.say(
+        summary.faults.length
+          ? "挥杆完成，来看一下分析报告"
+          : "漂亮，这一杆没有明显问题",
+        "summary",
+        2000
+      );
+      showSummary(summary);
+    }
   }
 
   // FPS 统计
@@ -213,6 +243,9 @@ async function startAnalysis() {
     }
   }
   analyzer = new SwingAnalyzer(state.view, state.handedness);
+  snapshots.clear();
+  baselineAnnounced = false;
+  coach.unlock(); // 借用户点击手势解锁 iOS 语音
   state.running = true;
   const btn = $("startBtn");
   btn.textContent = "停止分析";
@@ -231,6 +264,7 @@ async function startAnalysis() {
 function stopAnalysis() {
   if (!state.running) return;
   state.running = false;
+  coach.stop();
   cancelAnimationFrame(state.rafId);
   if (state.source === "file") video.pause();
   const btn = $("startBtn");
@@ -265,7 +299,7 @@ function renderLiveFaults(keys, phase, lms) {
   }
   if (chips.length === 0 && lms &&
       (phase === PHASE.BACKSWING || phase === PHASE.DOWNSWING)) {
-    chips.push(`<div class="fault-chip good">✅ 动作不错，继续保持</div>`);
+    chips.push(`<div class="fault-chip good">动作不错，继续保持</div>`);
   }
   box.innerHTML = chips.join("");
 }
@@ -286,20 +320,24 @@ function showSummary(summary) {
   $("summaryModal").classList.remove("hidden");
 }
 
-// 报告卡片：TPI 特征名 + 球路影响 + 身体筛查原因 + 矫正练习
+// 报告卡片：问题瞬间截图 + 大白话解释优先，专业内容收进"进阶"折叠区
 function faultCardHtml(f) {
   const r = f.rule;
   const cls = r.severity === SEVERITY.BAD ? "bad" : "warn";
-  const drills = (r.drills || [])
-    .map((d) => `<li>${d}</li>`)
-    .join("");
+  const shot = snapshots.get(f.key);
+  const drills = (r.drills || []).map((d) => `<li>${d}</li>`).join("");
   return `
     <div class="summary-item">
-      <div class="si-title ${cls}">${r.title}</div>
-      ${r.tpi ? `<div class="si-tpi">${r.tpi}</div>` : ""}
-      ${r.why ? `<div class="si-block"><span class="si-label">影响</span>${r.why}</div>` : ""}
-      ${r.causes ? `<div class="si-block"><span class="si-label">身体筛查</span>${r.causes}</div>` : ""}
-      ${drills ? `<div class="si-block"><span class="si-label">矫正练习</span><ul class="si-drills">${drills}</ul></div>` : ""}
+      <div class="si-head">
+        <span class="si-dot ${cls}"></span>
+        <span class="si-title">${r.title}</span>
+        ${r.tpi ? `<span class="si-tpi">${r.tpi}</span>` : ""}
+      </div>
+      ${shot ? `<img class="si-shot" src="${shot}" alt="问题发生瞬间" />` : ""}
+      ${r.plain ? `<div class="si-plain">${r.plain}</div>` : ""}
+      ${r.why ? `<div class="si-block"><span class="si-label">对球路的影响</span>${r.why}</div>` : ""}
+      ${drills ? `<div class="si-block"><span class="si-label">怎么练</span><ul class="si-drills">${drills}</ul></div>` : ""}
+      ${r.causes ? `<details class="si-more"><summary>进阶 · 身体原因（TPI 筛查）</summary><p>${r.causes}</p></details>` : ""}
     </div>`;
 }
 
@@ -314,8 +352,8 @@ function showHint(text, ms = 3000) {
 
 function hintForView() {
   return state.view === "front"
-    ? "📷 正面拍摄：镜头正对球员胸口，距离约 3-4 米，全身入镜"
-    : "📷 侧面拍摄：镜头沿目标线方向、与手齐高，距离约 3-4 米";
+    ? "正面拍摄：镜头正对球员胸口，距离约 3-4 米，全身入镜"
+    : "侧面拍摄：镜头沿目标线方向、与手齐高，距离约 3-4 米";
 }
 
 /* ---------------- 交互 ---------------- */
@@ -328,8 +366,17 @@ $("startBtn").addEventListener("click", () => {
 $("closeSummary").addEventListener("click", () => {
   $("summaryModal").classList.add("hidden");
   analyzer.nextSwing();
+  snapshots.clear();
+  baselineAnnounced = false;
   if (state.running && state.source === "camera")
     showHint("摆好准备姿势，开始下一次挥杆", 3000);
+});
+
+$("voiceBtn").addEventListener("click", () => {
+  coach.setEnabled(!coach.enabled);
+  $("voiceBtn").classList.toggle("off", !coach.enabled);
+  $("voiceBtn").textContent = coach.enabled ? "🔊" : "🔇";
+  showHint(coach.enabled ? "语音指导已开启" : "语音指导已关闭", 1500);
 });
 
 $("uploadBtn").addEventListener("click", () => $("videoInput").click());

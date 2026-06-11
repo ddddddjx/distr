@@ -66,15 +66,43 @@ export class PoseDetector {
     }
     const utils = new DrawingUtils(ctx);
     utils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, {
-      color: "rgba(52, 199, 89, 0.85)",
+      color: "rgba(48, 209, 88, 0.9)",
       lineWidth: 3,
     });
     utils.drawLandmarks(landmarks, {
       color: "#ffffff",
-      fillColor: "#34c759",
+      fillColor: "#30d158",
       lineWidth: 1,
       radius: 3.5,
     });
     ctx.restore();
+  }
+
+  /** 截取当前视频帧 + 骨骼的合成小图（用于报告中标记问题发生的瞬间） */
+  snapshot(video, landmarks, mirrored, maxW = 480) {
+    const w = video.videoWidth, h = video.videoHeight;
+    if (!w || !h) return null;
+    const scale = Math.min(1, maxW / w);
+    const c = document.createElement("canvas");
+    c.width = Math.round(w * scale);
+    c.height = Math.round(h * scale);
+    const ctx = c.getContext("2d");
+    if (mirrored) {
+      ctx.translate(c.width, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(video, 0, 0, c.width, c.height);
+    if (landmarks) {
+      const utils = new DrawingUtils(ctx);
+      utils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, {
+        color: "rgba(48, 209, 88, 0.9)",
+        lineWidth: 2,
+      });
+    }
+    try {
+      return c.toDataURL("image/jpeg", 0.75);
+    } catch {
+      return null;
+    }
   }
 }
