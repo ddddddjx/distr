@@ -1,15 +1,15 @@
 // MediaPipe Pose Landmarker 封装：负责加载模型、逐帧推理、绘制骨骼
+// 推理库、WASM 与模型均随站点自托管（vendor/ 目录），与页面同源加载，
+// 不依赖任何第三方 CDN——只要页面能打开，模型就能加载（含国内网络环境）。
 import {
   PoseLandmarker,
   FilesetResolver,
   DrawingUtils,
-} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+} from "../vendor/mediapipe/vision_bundle.mjs";
 
-const WASM_URL =
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const WASM_URL = "vendor/mediapipe/wasm";
 // lite 模型在中端手机上约 20-30 FPS，足够实时反馈；追求精度可换 full
-const MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+const MODEL_URL = "vendor/models/pose_landmarker_lite.task";
 
 export const LM = {
   NOSE: 0,

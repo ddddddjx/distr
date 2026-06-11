@@ -26,43 +26,92 @@ let analyzer = new SwingAnalyzer(state.view, state.handedness);
 
 /* ---------------- 初始化 ---------------- */
 
+const isWeChat = /MicroMessenger/i.test(navigator.userAgent);
+
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error(message)), ms)),
+  ]);
+}
+
 async function boot() {
   try {
     $("loadingText").textContent = "正在加载 AI 姿态模型…";
     await detector.init();
-    $("loadingText").textContent = "正在打开摄像头…";
+  } catch (err) {
+    // 模型加载失败是致命错误，保留遮罩提示
+    $("loadingText").textContent = "AI 模型加载失败，请检查网络后刷新页面。" + (err?.message || "");
+    $("loading").querySelector(".spinner")?.remove();
+    return;
+  }
+  $("loadingText").textContent = "正在打开摄像头…";
+  try {
     await openCamera();
     $("loading").classList.add("hidden");
     showHint(hintForView(), 4000);
   } catch (err) {
-    $("loadingText").textContent = cameraErrorMessage(err);
-    $("loading").querySelector(".spinner")?.remove();
+    // 相机失败不阻塞应用：上传视频分析仍然可用
+    $("loading").classList.add("hidden");
+    showHint(cameraErrorMessage(err), 12000);
   }
 }
 
 function cameraErrorMessage(err) {
+  if (isWeChat)
+    return "微信内置浏览器不支持实时摄像头：请点右上角「···」选择「在浏览器中打开」；或直接用下方「上传视频」分析（微信内可用）。";
   if (err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError"))
-    return "无法访问摄像头：请在浏览器设置中允许相机权限后刷新页面。";
+    return "无法访问摄像头：请在浏览器设置中允许相机权限后刷新页面，或使用「上传视频」分析。";
   if (location.protocol !== "https:" && location.hostname !== "localhost")
     return "摄像头需要 HTTPS 环境。请通过 https:// 或 localhost 访问本页面。";
-  return "初始化失败：" + (err?.message || err);
+  return "摄像头打开失败（" + (err?.message || err) + "）。可改用「上传视频」分析。";
 }
 
 async function openCamera() {
   stopMediaSources();
   state.source = "camera";
-  state.stream = await navigator.mediaDevices.getUserMedia({
-    audio: false,
-    video: {
-      facingMode: state.facing,
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-    },
-  });
+  if (!navigator.mediaDevices?.getUserMedia)
+    throw new Error("当前浏览器环境不支持摄像头 API");
+
+  // 约束逐级放宽：部分 WebView/老设备对分辨率或 facingMode 约束会直接挂起
+  const constraintTries = [
+    { facingMode: state.facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+    { facingMode: state.facing },
+    true,
+  ];
+  let lastErr = null;
+  for (const c of constraintTries) {
+    try {
+      state.stream = await withTimeout(
+        navigator.mediaDevices.getUserMedia({ audio: false, video: c }),
+        8000,
+        "打开摄像头超时"
+      );
+      break;
+    } catch (e) {
+      lastErr = e;
+      // 用户明确拒绝授权时不再重试
+      if (e?.name === "NotAllowedError" || e?.name === "PermissionDeniedError") throw e;
+    }
+  }
+  if (!state.stream) throw lastErr || new Error("无法获取摄像头");
+
   video.srcObject = state.stream;
   video.classList.toggle("mirrored", state.facing === "user");
-  await new Promise((res) => (video.onloadedmetadata = res));
-  await video.play();
+  if (video.readyState < 1) {
+    await withTimeout(
+      new Promise((res) => video.addEventListener("loadedmetadata", res, { once: true })),
+      7000,
+      "摄像头画面加载超时"
+    ).catch(() => {}); // 个别 WebView 不触发该事件但画面正常，继续往下走
+  }
+  try {
+    await video.play();
+  } catch {
+    // 自动播放被拦截：等用户任意点击后再播
+    showHint("点击屏幕任意位置开启画面", 8000);
+    document.addEventListener("click", () => video.play().catch(() => {}), { once: true });
+  }
   detector.lastVideoTime = -1;
   resizeOverlay();
 }
@@ -154,6 +203,15 @@ function loop() {
 /* ---------------- 分析启停 ---------------- */
 
 async function startAnalysis() {
+  // 相机模式下若此前打开失败，先重试一次
+  if (state.source === "camera" && !state.stream) {
+    try {
+      await openCamera();
+    } catch (err) {
+      showHint(cameraErrorMessage(err), 12000);
+      return;
+    }
+  }
   analyzer = new SwingAnalyzer(state.view, state.handedness);
   state.running = true;
   const btn = $("startBtn");
