@@ -1,7 +1,13 @@
 // 挥杆分析核心：
 // 1. 状态机切分挥杆阶段：准备 → 上杆 → 顶点 → 下杆 → 击球 → 送杆 → 收杆
 // 2. 在对应阶段运行 rules.js 中的检测规则，输出实时提示
-// 3. 一次挥杆结束后生成总结报告
+// 3. 一次挥杆结束后生成总结报告（连续评分制）
+//
+// 坐标系说明（镜头运动补偿）：
+// 所有位置都转换为"以双脚踝中点为原点、以躯干长度为单位"的归一化坐标。
+// 挥杆过程中双脚是钉在地上的，因此镜头的平移、跟拍、变焦都不会改变
+// 归一化坐标——电视转播类素材的位移误报由此消除。
+// 角度类指标（脊柱角、肩线倾角、肘角）本身与平移/缩放无关。
 import { LM } from "./poseDetector.js";
 import { RULES, SEVERITY } from "./rules.js";
 
@@ -67,14 +73,17 @@ export class SwingAnalyzer {
 
   reset() {
     this.phase = PHASE.IDLE;
-    this.baseline = null;       // 准备姿势基准（关键点均值）
+    this.baseline = null;       // 准备姿势基准（归一化坐标均值）
     this.addressFrames = [];    // 静止采样缓冲
-    this.lastWristY = null;
-    this.wristVelY = 0;
+    this.useAnkleAnchor = null; // 脚踝是否可见（决定是否启用镜头运动补偿）
+    this.lastHandsY = null;
+    this.handsVelY = 0;         // 归一化单位/帧
     this.topReachedAt = 0;
     this.finishStillSince = 0;
     this.targetDir = 0;         // +1 / -1：目标方向（由上杆方向反推，免疫镜像）
-    this.faultsThisSwing = new Map(); // ruleKey -> { worst, phase }
+    this.bsPath = [];           // 上杆手部路径（OTT 判定用）
+    this.ottCount = 0;
+    this.faultsThisSwing = new Map(); // ruleKey -> { ratio, phase }
     this.liveFaults = [];
     this.summary = null;
   }
@@ -84,6 +93,36 @@ export class SwingAnalyzer {
     return this.handedness === "right"
       ? { wrist: LM.L_WRIST, elbow: LM.L_ELBOW, shoulder: LM.L_SHOULDER }
       : { wrist: LM.R_WRIST, elbow: LM.R_ELBOW, shoulder: LM.R_SHOULDER };
+  }
+
+  /**
+   * 把一帧关键点转换为归一化坐标系（原点=脚踝中点，单位=躯干长度）。
+   * 脚踝不可见时退化为画面绝对坐标（仅缩放归一化）。
+   */
+  _normalize(lms) {
+    const sh = mid(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]);
+    const hp = mid(lms[LM.L_HIP], lms[LM.R_HIP]);
+    const torso = dist(sh, hp);
+    if (torso < 1e-4) return null;
+    if (this.useAnkleAnchor === null) {
+      // 在首帧锁定参考系模式，整次挥杆保持一致
+      const vis =
+        ((lms[LM.L_ANKLE].visibility ?? 1) + (lms[LM.R_ANKLE].visibility ?? 1)) / 2;
+      this.useAnkleAnchor = vis > 0.5;
+    }
+    const anchor = this.useAnkleAnchor
+      ? mid(lms[LM.L_ANKLE], lms[LM.R_ANKLE])
+      : { x: 0, y: 0 };
+    const n = (p) => ({ x: (p.x - anchor.x) / torso, y: (p.y - anchor.y) / torso });
+    return {
+      hands: n(mid(lms[LM.L_WRIST], lms[LM.R_WRIST])),
+      hip: n(hp),
+      shoulder: n(sh),
+      head: n(lms[LM.NOSE]),
+      shoulderW: dist(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]) / torso,
+      spine: spineAngleFromVertical(lms),
+      lean: spineLeanSigned(lms),
+    };
   }
 
   /** 每帧调用。返回 { phase, liveFaults, summary }，summary 仅在收杆后出现一次 */
@@ -98,65 +137,56 @@ export class SwingAnalyzer {
       return this._out();
     }
 
-    // 双手中点（握杆位置近似），y 越小越高
-    const hands = mid(lms[LM.L_WRIST], lms[LM.R_WRIST]);
-    const torso = dist(
-      mid(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]),
-      mid(lms[LM.L_HIP], lms[LM.R_HIP])
-    );
-    if (torso < 1e-4) return this._out();
+    const f = this._normalize(lms);
+    if (!f) return this._out();
 
-    if (this.lastWristY !== null) this.wristVelY = hands.y - this.lastWristY;
-    this.lastWristY = hands.y;
+    if (this.lastHandsY !== null) this.handsVelY = f.hands.y - this.lastHandsY;
+    this.lastHandsY = f.hands.y;
 
     switch (this.phase) {
       case PHASE.IDLE:
-        this._detectAddress(lms, hands, torso, tMs);
+        this._detectAddress(f, tMs);
         break;
       case PHASE.ADDRESS:
-        this._collectBaseline(lms, hands, torso, tMs);
+        this._collectBaseline(lms, f, tMs);
         break;
       case PHASE.BACKSWING:
-        this._checkBackswing(lms, torso, hands);
+        this._checkBackswing(lms, f);
         // 手回升（y 增大）且已明显高于基准 → 到达顶点
-        if (
-          hands.y < this.baseline.handsY - 0.35 * torso &&
-          this.wristVelY > 0.002
-        ) {
+        if (f.hands.y < this.baseline.hands.y - 0.35 && this.handsVelY > 0.008) {
           this.phase = PHASE.TOP;
           this.topReachedAt = tMs;
-          this._checkTop(lms, torso);
-        } else if (hands.y > this.baseline.handsY - 0.05 * torso) {
+          this._checkTop(lms, f);
+        } else if (f.hands.y > this.baseline.hands.y - 0.05) {
           // 上杆中途收回（取消试挥）→ 回到准备状态，保留基准
           this.phase = PHASE.ADDRESS;
           this.faultsThisSwing.clear();
         }
         break;
       case PHASE.TOP:
-        this._checkTop(lms, torso);
-        if (tMs - this.topReachedAt > 80 || this.wristVelY > 0.004) {
+        this._checkTop(lms, f);
+        if (tMs - this.topReachedAt > 80 || this.handsVelY > 0.016) {
           this.phase = PHASE.DOWNSWING;
         }
         break;
       case PHASE.DOWNSWING:
-        this._checkDownswing(lms, torso, hands);
+        this._checkDownswing(lms, f);
         // 手回到基准高度附近 → 击球区
-        if (hands.y > this.baseline.handsY - 0.15 * torso) {
+        if (f.hands.y > this.baseline.hands.y - 0.15) {
           this.phase = PHASE.IMPACT;
-          this._checkImpact(lms, torso);
+          this._checkImpact(lms, f);
         }
         break;
       case PHASE.IMPACT:
-        this._checkImpact(lms, torso);
-        if (hands.y < this.baseline.handsY - 0.25 * torso) {
+        this._checkImpact(lms, f);
+        if (f.hands.y < this.baseline.hands.y - 0.25) {
           this.phase = PHASE.FOLLOW;
         }
         break;
       case PHASE.FOLLOW: {
         // 手高过肩且基本静止 → 收杆
-        const shoulderY = mid(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]).y;
-        const still = Math.abs(this.wristVelY) < 0.003;
-        if (hands.y < shoulderY && still) {
+        const still = Math.abs(this.handsVelY) < 0.012;
+        if (f.hands.y < f.shoulder.y && still) {
           if (!this.finishStillSince) this.finishStillSince = tMs;
           if (tMs - this.finishStillSince > 400) this._finishSwing();
         } else {
@@ -178,60 +208,51 @@ export class SwingAnalyzer {
 
   /* ---------- 阶段：等待 / 准备 ---------- */
 
-  _detectAddress(lms, hands, torso, tMs) {
+  _detectAddress(f, tMs) {
     // 手在髋部以下且整体静止 → 认为进入准备姿势
-    const hipY = mid(lms[LM.L_HIP], lms[LM.R_HIP]).y;
-    if (hands.y > hipY && Math.abs(this.wristVelY) < 0.004) {
+    if (f.hands.y > f.hip.y && Math.abs(this.handsVelY) < 0.016) {
       this.phase = PHASE.ADDRESS;
       this.addressFrames = [];
       this.addressStart = tMs;
     }
   }
 
-  _collectBaseline(lms, hands, torso, tMs) {
+  _collectBaseline(lms, f, tMs) {
     if (this.baseline) {
       // 基准已锁定：手明显抬高即进入上杆，小幅晃动则继续保持准备状态
-      if (hands.y < this.baseline.handsY - 0.08 * torso) this._beginBackswing(hands);
+      if (f.hands.y < this.baseline.hands.y - 0.08) this._beginBackswing(f);
       return;
     }
-    if (Math.abs(this.wristVelY) > 0.006) {
+    if (Math.abs(this.handsVelY) > 0.024) {
       // 基准尚未锁定时移动 → 重新等待静止
       this.phase = PHASE.IDLE;
       return;
     }
-    this.addressFrames.push({
-      handsY: hands.y,
-      handsX: hands.x,
-      hipX: mid(lms[LM.L_HIP], lms[LM.R_HIP]).x,
-      hipY: mid(lms[LM.L_HIP], lms[LM.R_HIP]).y,
-      headX: lms[LM.NOSE].x,
-      headY: lms[LM.NOSE].y,
-      spine: spineAngleFromVertical(lms),
-      lean: spineLeanSigned(lms),
-      shoulderW: dist(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]),
-      torso,
-    });
+    this.addressFrames.push(f);
     // 静止约 600ms（≥12 帧）后锁定基准并做准备姿势检查
     if (this.addressFrames.length >= 12 && !this.baseline) {
-      const avg = (k) =>
-        this.addressFrames.reduce((s, f) => s + f[k], 0) / this.addressFrames.length;
+      const fs = this.addressFrames;
+      const avgP = (k) => ({
+        x: fs.reduce((s, x) => s + x[k].x, 0) / fs.length,
+        y: fs.reduce((s, x) => s + x[k].y, 0) / fs.length,
+      });
+      const avg = (k) => fs.reduce((s, x) => s + x[k], 0) / fs.length;
       this.baseline = {
-        handsY: avg("handsY"), handsX: avg("handsX"),
-        hipX: avg("hipX"), hipY: avg("hipY"),
-        headX: avg("headX"), headY: avg("headY"),
+        hands: avgP("hands"), hip: avgP("hip"),
+        shoulder: avgP("shoulder"), head: avgP("head"),
+        shoulderW: avg("shoulderW"),
         spine: avg("spine"), lean: avg("lean"),
-        shoulderW: avg("shoulderW"), torso: avg("torso"),
         // 侧面视角：球的方向 = 准备姿势时手相对髋的方向（用于 OTT 判定）
-        ballDir: Math.sign(avg("handsX") - avg("hipX")) || 1,
+        ballDir: Math.sign(avgP("hands").x - avgP("hip").x) || 1,
       };
       this._checkAddress(lms);
     }
   }
 
-  _beginBackswing(hands) {
+  _beginBackswing(f) {
     this.phase = PHASE.BACKSWING;
     // 上杆时手远离目标 → 反推目标方向（与镜像、左右手均无关）
-    this.targetDir = hands.x > this.baseline.handsX ? -1 : 1;
+    this.targetDir = f.hands.x > this.baseline.hands.x ? -1 : 1;
     // 侧面视角记录上杆手部路径，下杆时对比判定 Over-the-Top
     this.bsPath = [];
     this.ottCount = 0;
@@ -239,105 +260,110 @@ export class SwingAnalyzer {
 
   /* ---------- 各阶段规则检查 ---------- */
 
-  _record(key, value = 1) {
+  /**
+   * 记录一次问题触发。
+   * @param {string} key 规则键
+   * @param {number} ratio 偏差程度：1.0 = 刚到阈值，2.0 = 超出一倍，用于连续评分
+   */
+  _record(key, ratio = 1.2) {
     const prev = this.faultsThisSwing.get(key);
-    if (!prev || value > prev.worst) {
-      this.faultsThisSwing.set(key, { worst: value, phase: this.phase });
+    if (!prev || ratio > prev.ratio) {
+      this.faultsThisSwing.set(key, { ratio, phase: this.phase });
     }
     this.liveFaults.push(key);
   }
 
   _checkAddress(lms) {
     if (this.view !== "side") return;
-    if (this.baseline.spine < 20) this._record("SPINE_TOO_UPRIGHT");
-    else if (this.baseline.spine > 50) this._record("SPINE_TOO_BENT");
+    const spine = this.baseline.spine;
+    if (spine < 20) this._record("SPINE_TOO_UPRIGHT", 1 + (20 - spine) / 15);
+    else if (spine > 50) this._record("SPINE_TOO_BENT", 1 + (spine - 50) / 15);
     // TPI C-Posture：颈部（耳-肩连线）相对脊柱明显前探 → 圆肩驼背
-    if (lms) {
-      const ear = mid(lms[LM.L_EAR], lms[LM.R_EAR]);
-      const sh = mid(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]);
-      const neckAng =
-        (Math.atan2(Math.abs(ear.x - sh.x), Math.abs(ear.y - sh.y)) * 180) / Math.PI;
-      if (neckAng - this.baseline.spine > 25)
-        this._record("C_POSTURE", neckAng - this.baseline.spine);
-    }
+    const ear = mid(lms[LM.L_EAR], lms[LM.R_EAR]);
+    const sh = mid(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]);
+    const neckAng =
+      (Math.atan2(Math.abs(ear.x - sh.x), Math.abs(ear.y - sh.y)) * 180) / Math.PI;
+    if (neckAng - spine > 25) this._record("C_POSTURE", (neckAng - spine) / 25);
   }
 
-  _checkBackswing(lms, torso, hands) {
+  _checkBackswing(lms, f) {
     const b = this.baseline;
     if (this.view === "side") {
-      this._checkPosture(lms, torso);
-      if (hands) this.bsPath.push({ x: hands.x, y: hands.y });
+      this._checkPosture(lms, f);
+      this.bsPath.push({ x: f.hands.x, y: f.hands.y });
     } else {
-      const headDx = Math.abs(lms[LM.NOSE].x - b.headX);
-      if (headDx > 0.45 * b.shoulderW) this._record("HEAD_SWAY", headDx);
+      const headDx = Math.abs(f.head.x - b.head.x);
+      const headLimit = 0.55 * b.shoulderW;
+      if (headDx > headLimit) this._record("HEAD_SWAY", headDx / headLimit);
       // 髋部向"远离目标"方向平移过多 = 摇摆
-      const hipX = mid(lms[LM.L_HIP], lms[LM.R_HIP]).x;
-      const sway = (hipX - b.hipX) * -this.targetDir;
-      if (sway > 0.35 * b.shoulderW) this._record("HIP_SWAY", sway);
+      const sway = (f.hip.x - b.hip.x) * -this.targetDir;
+      const swayLimit = 0.42 * b.shoulderW;
+      if (sway > swayLimit) this._record("HIP_SWAY", sway / swayLimit);
     }
   }
 
-  _checkTop(lms, torso) {
+  _checkTop(lms, f) {
     if (this.view !== "front") return;
     // 顶点时上身应略微远离目标；倒向目标 = 逆向脊柱倾斜
-    const lean = spineLeanSigned(lms) - this.baseline.lean;
-    if (lean * this.targetDir > 6) this._record("REVERSE_SPINE", lean * this.targetDir);
+    const lean = (f.lean - this.baseline.lean) * this.targetDir;
+    if (lean > 8) this._record("REVERSE_SPINE", lean / 8);
     // TPI Flat Shoulder Plane：顶点双肩连线应明显倾斜（前导肩低于后肩）
     const ls = lms[LM.L_SHOULDER], rs = lms[LM.R_SHOULDER];
     const tilt =
       (Math.atan2(Math.abs(ls.y - rs.y), Math.abs(ls.x - rs.x) || 1e-6) * 180) / Math.PI;
-    if (tilt < 12) this._record("FLAT_SHOULDER_PLANE", 12 - tilt);
+    if (tilt < 10) this._record("FLAT_SHOULDER_PLANE", 1 + (10 - tilt) / 10);
   }
 
-  _checkDownswing(lms, torso, hands) {
+  _checkDownswing(lms, f) {
     const b = this.baseline;
     if (this.view === "side") {
-      this._checkPosture(lms, torso);
-      // 早伸：髋部沿水平方向顶出（侧面视角下任一水平方向位移过大）
-      const hipDx = Math.abs(mid(lms[LM.L_HIP], lms[LM.R_HIP]).x - b.hipX);
-      if (hipDx > 0.22 * b.torso) this._record("EARLY_EXTENSION", hipDx);
+      this._checkPosture(lms, f);
+      // 早伸：髋部沿水平方向顶出
+      const hipDx = Math.abs(f.hip.x - b.hip.x);
+      if (hipDx > 0.26) this._record("EARLY_EXTENSION", hipDx / 0.26);
       // TPI Over-the-Top：同一高度上，下杆手部路径比上杆明显更靠球一侧
-      if (hands && this.bsPath.length > 4) {
+      if (this.bsPath.length > 4) {
         let nearest = null, best = Infinity;
         for (const p of this.bsPath) {
-          const dy = Math.abs(p.y - hands.y);
+          const dy = Math.abs(p.y - f.hands.y);
           if (dy < best) { best = dy; nearest = p; }
         }
-        if (nearest && best < 0.08) {
-          const out = (hands.x - nearest.x) * b.ballDir;
-          if (out > 0.12 * b.torso) {
+        if (nearest && best < 0.3) {
+          const out = (f.hands.x - nearest.x) * b.ballDir;
+          if (out > 0.15) {
             // 连续多帧偏外才判定，避免单帧抖动误报
-            if (++this.ottCount >= 3) this._record("OVER_THE_TOP", out);
+            if (++this.ottCount >= 4) this._record("OVER_THE_TOP", out / 0.15);
           }
         }
       }
     } else {
       // 滑动：髋部向目标方向平移过多
-      const hipX = mid(lms[LM.L_HIP], lms[LM.R_HIP]).x;
-      const slide = (hipX - b.hipX) * this.targetDir;
-      if (slide > 0.6 * b.shoulderW) this._record("HIP_SLIDE", slide);
+      const slide = (f.hip.x - b.hip.x) * this.targetDir;
+      const slideLimit = 0.75 * b.shoulderW;
+      if (slide > slideLimit) this._record("HIP_SLIDE", slide / slideLimit);
     }
   }
 
-  _checkImpact(lms) {
+  _checkImpact(lms, f) {
     if (this.view !== "front") return;
     const s = this.leadSide;
     const elbow = angleAt(lms[s.shoulder], lms[s.elbow], lms[s.wrist]);
-    if (elbow < 145) this._record("CHICKEN_WING", 180 - elbow);
+    if (elbow < 140) this._record("CHICKEN_WING", 1 + (140 - elbow) / 25);
     // TPI Hanging Back：击球时骨盆几乎没有向目标方向移动（重心滞留后脚）
     const b = this.baseline;
-    const shift =
-      (mid(lms[LM.L_HIP], lms[LM.R_HIP]).x - b.hipX) * this.targetDir;
-    if (shift < 0.05 * b.shoulderW) this._record("HANGING_BACK", 0.05 * b.shoulderW - shift);
+    const shift = (f.hip.x - b.hip.x) * this.targetDir;
+    const minShift = 0.02 * b.shoulderW;
+    if (shift < minShift)
+      this._record("HANGING_BACK", 1 + (minShift - shift) / (0.15 * b.shoulderW));
   }
 
   /** 侧面通用：起身 / 头部起伏（上杆和下杆都检查） */
-  _checkPosture(lms, torso) {
+  _checkPosture(lms, f) {
     const b = this.baseline;
-    const dSpine = Math.abs(spineAngleFromVertical(lms) - b.spine);
-    if (dSpine > 12) this._record("LOSS_OF_POSTURE", dSpine);
-    const headDy = Math.abs(lms[LM.NOSE].y - b.headY);
-    if (headDy > 0.18 * b.torso) this._record("HEAD_DROP", headDy);
+    const dSpine = Math.abs(f.spine - b.spine);
+    if (dSpine > 13) this._record("LOSS_OF_POSTURE", dSpine / 13);
+    const headDy = Math.abs(f.head.y - b.head.y);
+    if (headDy > 0.22) this._record("HEAD_DROP", headDy / 0.22);
   }
 
   /* ---------- 收杆 → 生成报告 ---------- */
@@ -347,14 +373,21 @@ export class SwingAnalyzer {
     const faults = [...this.faultsThisSwing.entries()]
       .map(([key, v]) => ({ key, rule: RULES[key], ...v }))
       .filter((f) => f.rule)
-      .sort((a, b) =>
-        (b.rule.severity === SEVERITY.BAD) - (a.rule.severity === SEVERITY.BAD)
+      .sort(
+        (a, b) =>
+          (b.rule.severity === SEVERITY.BAD) - (a.rule.severity === SEVERITY.BAD) ||
+          b.ratio - a.ratio
       );
-    // 简单评分：满分 100，严重问题 -20，轻微问题 -10
-    const score = Math.max(
-      40,
-      100 - faults.reduce((s, f) => s + (f.rule.severity === SEVERITY.BAD ? 20 : 10), 0)
-    );
+    // 连续评分：扣分随偏差程度线性增长。
+    // ratio=1.0（刚擦线）→ 严重 -8 / 轻微 -4；ratio≥1.6（超出 60%）→ 严重 -20 / 轻微 -10
+    const deduction = (f) => {
+      const bad = f.rule.severity === SEVERITY.BAD;
+      const min = bad ? 8 : 4;
+      const max = bad ? 20 : 10;
+      const t = Math.min(1, Math.max(0, (f.ratio - 1) / 0.6));
+      return Math.round(min + (max - min) * t);
+    };
+    const score = Math.max(40, 100 - faults.reduce((s, f) => s + deduction(f), 0));
     this.summary = { score, faults, view: this.view };
   }
 
