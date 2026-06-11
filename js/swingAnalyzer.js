@@ -358,6 +358,16 @@ export class SwingAnalyzer {
     this.summary = { score, faults, view: this.view };
   }
 
+  /** 视频播放结束等场景下强制结束本次挥杆：已进入挥杆阶段则直接生成报告 */
+  finalize() {
+    const swinging = ![PHASE.IDLE, PHASE.ADDRESS, PHASE.FINISH].includes(this.phase);
+    if (this.baseline && swinging) {
+      this._finishSwing();
+      return this.summary;
+    }
+    return null;
+  }
+
   /** 收杆报告确认后调用，准备分析下一次挥杆 */
   nextSwing() {
     const { view, handedness } = this;

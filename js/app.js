@@ -1,4 +1,4 @@
-// 应用主控：相机管理、推理循环、UI 状态与反馈渲染
+// 应用主控：相机/视频文件双数据源、推理循环、UI 状态与反馈渲染
 import { PoseDetector } from "./poseDetector.js";
 import { SwingAnalyzer, PHASE, PHASE_LABEL } from "./swingAnalyzer.js";
 import { RULES, SEVERITY } from "./rules.js";
@@ -10,10 +10,12 @@ const ctx = overlay.getContext("2d");
 
 const state = {
   running: false,
+  source: "camera",      // "camera" 实时相机 | "file" 上传的视频
   facing: "environment", // 默认后置镜头（由他人帮拍）
   view: "front",
   handedness: "right",
   stream: null,
+  fileUrl: null,
   rafId: 0,
   frames: 0,
   fpsT0: performance.now(),
@@ -47,7 +49,8 @@ function cameraErrorMessage(err) {
 }
 
 async function openCamera() {
-  if (state.stream) state.stream.getTracks().forEach((t) => t.stop());
+  stopMediaSources();
+  state.source = "camera";
   state.stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
     video: {
@@ -60,7 +63,21 @@ async function openCamera() {
   video.classList.toggle("mirrored", state.facing === "user");
   await new Promise((res) => (video.onloadedmetadata = res));
   await video.play();
+  detector.lastVideoTime = -1;
   resizeOverlay();
+}
+
+function stopMediaSources() {
+  if (state.stream) {
+    state.stream.getTracks().forEach((t) => t.stop());
+    state.stream = null;
+  }
+  video.srcObject = null;
+  if (state.fileUrl) {
+    URL.revokeObjectURL(state.fileUrl);
+    state.fileUrl = null;
+  }
+  video.removeAttribute("src");
 }
 
 function resizeOverlay() {
@@ -69,18 +86,61 @@ function resizeOverlay() {
 }
 window.addEventListener("resize", resizeOverlay);
 
+/* ---------------- 视频文件模式 ---------------- */
+
+async function enterFileMode(file) {
+  stopAnalysis();
+  stopMediaSources();
+  state.source = "file";
+  state.fileUrl = URL.createObjectURL(file);
+  video.src = state.fileUrl;
+  video.classList.remove("mirrored");
+  video.loop = false;
+  $("stage").classList.add("file-mode");
+  $("flipBtn").textContent = "🎥 返回相机";
+  await new Promise((res) => (video.onloadedmetadata = res));
+  resizeOverlay();
+  showHint("请确认上方机位选择与视频拍摄角度一致，点「开始分析」", 5000);
+  $("phasePill").textContent = "视频已就绪";
+}
+
+async function exitFileMode() {
+  stopAnalysis();
+  $("stage").classList.remove("file-mode");
+  $("flipBtn").textContent = "🔄 切换镜头";
+  try {
+    await openCamera();
+    showHint(hintForView(), 3000);
+  } catch (err) {
+    showHint(cameraErrorMessage(err), 5000);
+  }
+}
+
+video.addEventListener("ended", () => {
+  if (state.source !== "file" || !state.running) return;
+  // 视频放完但还没自然收杆：强制出报告
+  const summary = analyzer.finalize();
+  if (summary) showSummary(summary);
+  stopAnalysis();
+  $("phasePill").textContent = "播放结束";
+  if (!summary && analyzer.phase !== PHASE.FINISH)
+    showHint("视频中未识别到完整挥杆，请确认全身入镜且机位选择正确", 5000);
+});
+
 /* ---------------- 推理主循环 ---------------- */
 
 function loop() {
   state.rafId = requestAnimationFrame(loop);
   const now = performance.now();
   const lms = detector.detect(video, now);
-  detector.draw(ctx, lms, state.facing === "user");
-
-  const { phase, liveFaults, summary } = analyzer.update(lms, now);
-  renderPhase(phase);
-  renderLiveFaults(liveFaults, phase, lms);
-  if (summary) showSummary(summary);
+  // undefined = 视频没有新帧（文件帧率低于渲染帧率），跳过本次分析
+  if (lms !== undefined) {
+    detector.draw(ctx, lms, state.source === "camera" && state.facing === "user");
+    const { phase, liveFaults, summary } = analyzer.update(lms, now);
+    renderPhase(phase);
+    renderLiveFaults(liveFaults, phase, lms);
+    if (summary) showSummary(summary);
+  }
 
   // FPS 统计
   state.frames++;
@@ -89,6 +149,39 @@ function loop() {
     state.frames = 0;
     state.fpsT0 = now;
   }
+}
+
+/* ---------------- 分析启停 ---------------- */
+
+async function startAnalysis() {
+  analyzer = new SwingAnalyzer(state.view, state.handedness);
+  state.running = true;
+  const btn = $("startBtn");
+  btn.textContent = "停止分析";
+  btn.classList.add("stop");
+  if (state.source === "file") {
+    video.currentTime = 0;
+    detector.lastVideoTime = -1;
+    await video.play();
+    showHint("正在分析视频…", 2500);
+  } else {
+    showHint("摆好准备姿势并静止 1 秒，开始你的挥杆", 4000);
+  }
+  loop();
+}
+
+function stopAnalysis() {
+  if (!state.running) return;
+  state.running = false;
+  cancelAnimationFrame(state.rafId);
+  if (state.source === "file") video.pause();
+  const btn = $("startBtn");
+  btn.textContent = state.source === "file" ? "重新分析" : "开始分析";
+  btn.classList.remove("stop");
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  $("liveFaults").innerHTML = "";
+  $("phasePill").textContent = "未开始";
+  $("phasePill").classList.remove("active");
 }
 
 /* ---------------- UI 渲染 ---------------- */
@@ -170,32 +263,30 @@ function hintForView() {
 /* ---------------- 交互 ---------------- */
 
 $("startBtn").addEventListener("click", () => {
-  state.running = !state.running;
-  const btn = $("startBtn");
-  if (state.running) {
-    analyzer = new SwingAnalyzer(state.view, state.handedness);
-    btn.textContent = "停止分析";
-    btn.classList.add("stop");
-    showHint("摆好准备姿势并静止 1 秒，开始你的挥杆", 4000);
-    loop();
-  } else {
-    btn.textContent = "开始分析";
-    btn.classList.remove("stop");
-    cancelAnimationFrame(state.rafId);
-    ctx.clearRect(0, 0, overlay.width, overlay.height);
-    $("liveFaults").innerHTML = "";
-    renderPhase(PHASE.IDLE);
-    $("phasePill").textContent = "未开始";
-  }
+  if (state.running) stopAnalysis();
+  else startAnalysis();
 });
 
 $("closeSummary").addEventListener("click", () => {
   $("summaryModal").classList.add("hidden");
   analyzer.nextSwing();
-  showHint("摆好准备姿势，开始下一次挥杆", 3000);
+  if (state.running && state.source === "camera")
+    showHint("摆好准备姿势，开始下一次挥杆", 3000);
+});
+
+$("uploadBtn").addEventListener("click", () => $("videoInput").click());
+
+$("videoInput").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (file) enterFileMode(file);
+  e.target.value = ""; // 允许重复选择同一个文件
 });
 
 $("flipBtn").addEventListener("click", async () => {
+  if (state.source === "file") {
+    await exitFileMode();
+    return;
+  }
   state.facing = state.facing === "environment" ? "user" : "environment";
   try {
     await openCamera();
@@ -218,12 +309,14 @@ function bindSeg(segId, dataKey, onChange) {
 
 bindSeg("viewSeg", "view", (v) => {
   state.view = v;
+  if (state.running) stopAnalysis();
   analyzer = new SwingAnalyzer(state.view, state.handedness);
-  showHint(hintForView(), 4000);
+  showHint(state.source === "file" ? "机位已切换，点「开始分析」重新分析视频" : hintForView(), 4000);
 });
 
 bindSeg("handSeg", "hand", (h) => {
   state.handedness = h;
+  if (state.running) stopAnalysis();
   analyzer = new SwingAnalyzer(state.view, state.handedness);
 });
 

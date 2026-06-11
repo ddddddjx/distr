@@ -52,6 +52,8 @@ html, body {
 }
 #video.mirrored { transform: scaleX(-1); }
 #overlay { z-index: 2; }
+/* 上传视频模式：完整显示画面（不裁剪），骨骼层与视频同步缩放对齐 */
+#stage.file-mode #video, #stage.file-mode #overlay { object-fit: contain; }
 
 /* 实时问题浮层 */
 #liveFaults {

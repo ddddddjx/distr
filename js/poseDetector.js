@@ -40,9 +40,13 @@ export class PoseDetector {
     });
   }
 
-  /** 对当前视频帧做姿态推理，返回归一化关键点数组（无人则返回 null） */
+  /**
+   * 对当前视频帧做姿态推理。
+   * 返回 undefined = 没有新帧（视频帧率低于渲染帧率时跳过该次渲染）；
+   * 返回 null = 有新帧但画面中没有人；否则返回归一化关键点数组。
+   */
   detect(video, nowMs) {
-    if (!this.landmarker || video.currentTime === this.lastVideoTime) return null;
+    if (!this.landmarker || video.currentTime === this.lastVideoTime) return undefined;
     this.lastVideoTime = video.currentTime;
     const result = this.landmarker.detectForVideo(video, nowMs);
     return result.landmarks && result.landmarks.length > 0
