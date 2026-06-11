@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0d1b12" />
+  <title>SwingCoach · 高尔夫挥杆 AI 分析</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部栏 -->
+    <header id="topbar">
+      <div class="brand">⛳ SwingCoach</div>
+      <div class="status-pill" id="phasePill">未开始</div>
+      <div class="fps" id="fpsLabel"></div>
+    </header>
+
+    <!-- 相机画面 + 骨骼叠加层 -->
+    <main id="stage">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="overlay"></canvas>
+
+      <!-- 实时反馈浮层 -->
+      <div id="liveFaults"></div>
+
+      <!-- 站位辅助提示 -->
+      <div id="hint" class="hint hidden"></div>
+    </main>
+
+    <!-- 控制面板 -->
+    <footer id="controls">
+      <div class="row">
+        <div class="seg" id="viewSeg">
+          <button data-view="front" class="active">正面拍摄</button>
+          <button data-view="side">侧面拍摄</button>
+        </div>
+        <div class="seg" id="handSeg">
+          <button data-hand="right" class="active">右手球员</button>
+          <button data-hand="left">左手球员</button>
+        </div>
+      </div>
+      <div class="row">
+        <button id="flipBtn" class="ghost">🔄 切换镜头</button>
+        <button id="startBtn" class="primary">开始分析</button>
+      </div>
+    </footer>
+
+    <!-- 挥杆总结弹窗 -->
+    <div id="summaryModal" class="modal hidden">
+      <div class="modal-card">
+        <h2>本次挥杆分析报告</h2>
+        <div id="summaryScore" class="score"></div>
+        <div id="summaryBody"></div>
+        <button id="closeSummary" class="primary">继续练习</button>
+      </div>
+    </div>
+
+    <!-- 加载遮罩 -->
+    <div id="loading" class="modal">
+      <div class="modal-card">
+        <div class="spinner"></div>
+        <p id="loadingText">正在加载 AI 姿态模型…</p>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
