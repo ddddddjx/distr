@@ -372,12 +372,53 @@ $("closeSummary").addEventListener("click", () => {
     showHint("摆好准备姿势，开始下一次挥杆", 3000);
 });
 
+/* ---------- 语音设置面板 ---------- */
+
 $("voiceBtn").addEventListener("click", () => {
+  coach.unlock(); // 借这次点击手势解锁语音，确保试听可发声
+  renderVoiceList();
+  syncVoiceUI();
+  $("voiceModal").classList.remove("hidden");
+});
+
+$("closeVoice").addEventListener("click", () => {
+  $("voiceModal").classList.add("hidden");
+});
+
+$("voiceToggleRow").addEventListener("click", () => {
   coach.setEnabled(!coach.enabled);
+  syncVoiceUI();
+});
+
+$("voiceList").addEventListener("click", (e) => {
+  const row = e.target.closest(".voice-row[data-name]");
+  if (!row) return;
+  coach.setVoiceByName(row.dataset.name);
+  renderVoiceList();
+});
+
+function syncVoiceUI() {
+  $("voiceSwitch").classList.toggle("on", coach.enabled);
   $("voiceBtn").classList.toggle("off", !coach.enabled);
   $("voiceBtn").textContent = coach.enabled ? "🔊" : "🔇";
-  showHint(coach.enabled ? "语音指导已开启" : "语音指导已关闭", 1500);
-});
+}
+
+function renderVoiceList() {
+  const voices = coach.listVoices();
+  const cur = coach.voice?.name;
+  $("voiceList").innerHTML = voices.length
+    ? voices
+        .map(
+          (v) => `
+          <div class="voice-row" data-name="${v.name}">
+            <span class="v-name">${v.name}</span>
+            <span class="v-lang">${v.lang}</span>
+            ${v.name === cur ? `<span class="v-check">✓</span>` : ""}
+          </div>`
+        )
+        .join("")
+    : `<div class="voice-empty">当前浏览器没有可用的中文语音。iPhone 可在 设置 → 辅助功能 → 朗读内容 → 声音 中下载；安卓需安装系统 TTS 引擎。</div>`;
+}
 
 $("uploadBtn").addEventListener("click", () => $("videoInput").click());
 

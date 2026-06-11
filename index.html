@@ -61,6 +61,24 @@
       </div>
     </div>
 
+    <!-- 语音设置面板 -->
+    <div id="voiceModal" class="modal hidden">
+      <div class="modal-card">
+        <h2>语音指导</h2>
+        <div class="voice-row" id="voiceToggleRow">
+          <span>实时语音提示</span>
+          <span class="switch on" id="voiceSwitch"></span>
+        </div>
+        <div class="voice-section-label">音色（点击试听）</div>
+        <div id="voiceList"></div>
+        <p class="voice-note">
+          音色来自手机系统语音库，不同设备可选项不同。出于声音肖像权保护，
+          无法使用真人明星的声音；选择台湾口音女声可获得相近的温柔风格。
+        </p>
+        <button id="closeVoice" class="primary">完成</button>
+      </div>
+    </div>
+
     <!-- 加载遮罩 -->
     <div id="loading" class="modal">
       <div class="modal-card">

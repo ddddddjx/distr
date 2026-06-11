@@ -238,6 +238,50 @@ button.ghost { background: var(--fill); color: var(--text); font-size: 14px; pad
 .summary-good { font-size: 15px; color: var(--green); margin-bottom: 14px; }
 .modal-card .primary { width: 100%; margin-top: 8px; }
 
+/* ---------- 语音设置 ---------- */
+.voice-row {
+  display: flex; align-items: center; gap: 8px;
+  text-align: left;
+  padding: 13px 14px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 0.5px solid var(--hairline);
+  border-radius: 12px;
+  margin-bottom: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.voice-row .v-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-row .v-lang { font-size: 11px; color: var(--text-3); }
+.voice-row .v-check { color: var(--green); font-weight: 700; }
+.voice-section-label {
+  text-align: left;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
+  color: var(--text-3); text-transform: uppercase;
+  margin: 14px 2px 8px;
+}
+.voice-note { text-align: left; font-size: 11.5px; color: var(--text-3); line-height: 1.6; margin-top: 10px; }
+.voice-empty { font-size: 13px; color: var(--text-2); line-height: 1.6; padding: 12px; text-align: left; }
+
+/* iOS 开关 */
+.switch {
+  margin-left: auto;
+  width: 46px; height: 28px; flex: none;
+  border-radius: 999px;
+  background: var(--fill);
+  position: relative;
+  transition: background .2s ease;
+}
+.switch::after {
+  content: "";
+  position: absolute; top: 2px; left: 2px;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  transition: transform .2s ease;
+}
+.switch.on { background: var(--green); }
+.switch.on::after { transform: translateX(18px); }
+
 /* ---------- 加载 ---------- */
 .spinner {
   width: 32px; height: 32px; margin: 0 auto 16px;
