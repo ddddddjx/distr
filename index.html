@@ -13,6 +13,7 @@
     <header id="topbar">
       <div class="brand"><span class="brand-dot"></span>SwingCoach</div>
       <div class="status-pill" id="phasePill">未开始</div>
+      <button id="statsBtn" class="icon-btn" title="练习统计">📊</button>
       <button id="voiceBtn" class="icon-btn" title="语音指导开关">🔊</button>
       <div class="fps" id="fpsLabel"></div>
     </header>
@@ -61,6 +62,15 @@
         <div id="keyframesWrap" class="keyframes hidden"></div>
         <div id="summaryBody"></div>
         <button id="closeSummary" class="primary">继续练习</button>
+      </div>
+    </div>
+
+    <!-- 练习统计面板 -->
+    <div id="statsModal" class="modal hidden">
+      <div class="modal-card">
+        <h2>练习统计</h2>
+        <div id="statsBody"></div>
+        <button id="closeStats" class="primary">关闭</button>
       </div>
     </div>
 

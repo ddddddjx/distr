@@ -3,6 +3,7 @@ import { PoseDetector } from "./poseDetector.js";
 import { SwingAnalyzer, PHASE, PHASE_LABEL } from "./swingAnalyzer.js";
 import { RULES, SEVERITY } from "./rules.js";
 import { VoiceCoach } from "./voice.js";
+import { saveSwing, computeStats } from "./store.js";
 
 const $ = (id) => document.getElementById(id);
 const video = $("video");
@@ -352,6 +353,7 @@ function renderLiveFaults(keys, phase, lms) {
 }
 
 function showSummary(summary) {
+  saveSwing(summary, state.source); // 存入练习历史（仅元数据，不含视频）
   const { score, faults, tempo } = summary;
   const scoreEl = $("summaryScore");
   scoreEl.textContent = score + " 分";
@@ -545,6 +547,96 @@ $("closeSummary").addEventListener("click", () => {
   if (state.running && state.source === "camera")
     showHint("摆好准备姿势，开始下一次挥杆", 3000);
 });
+
+/* ---------- 练习统计面板 ---------- */
+
+$("statsBtn").addEventListener("click", () => {
+  renderStats();
+  $("statsModal").classList.remove("hidden");
+});
+
+$("closeStats").addEventListener("click", () => {
+  $("statsModal").classList.add("hidden");
+});
+
+function renderStats() {
+  const body = $("statsBody");
+  const st = computeStats();
+  if (!st) {
+    body.innerHTML = `<p class="stats-empty">还没有练习数据。完成第一次挥杆分析后，这里会出现你的进步曲线。</p>`;
+    return;
+  }
+
+  // 本周概览
+  const diff =
+    st.week.prevScore !== null ? st.week.score - st.week.prevScore : null;
+  const diffHtml =
+    diff === null
+      ? ""
+      : `<span class="stat-diff ${diff >= 0 ? "up" : "down"}">${diff >= 0 ? "+" : ""}${diff} vs 上周</span>`;
+  let html = `
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-num">${st.week.count}</div><div class="stat-label">本周挥杆</div></div>
+      <div class="stat-card"><div class="stat-num">${st.week.score || "—"}</div><div class="stat-label">平均分 ${diffHtml}</div></div>
+      <div class="stat-card"><div class="stat-num">${st.week.tempo ? st.week.tempo + ":1" : "—"}</div><div class="stat-label">平均节奏</div></div>
+    </div>`;
+
+  // 主攻问题（按 TPI 因果链取根因）
+  if (st.focus) {
+    const f = st.focus;
+    const trend =
+      f.prev === null
+        ? ""
+        : ` · ${f.now <= f.prev ? "↓" : "↑"} 上周 ${Math.round(f.prev * 100)}%`;
+    html += `
+      <div class="focus-card">
+        <div class="focus-tag">本周主攻一个问题</div>
+        <div class="focus-title">${f.rule.title}</div>
+        <div class="focus-rate">触发率 ${Math.round(f.now * 100)}%${trend}</div>
+        <div class="focus-drill">${f.rule.drills?.[0] || ""}</div>
+        <div class="focus-note">教练逻辑：一次只改一个根因问题，相关的连锁问题往往随之消失。</div>
+      </div>`;
+  }
+
+  // 14 天评分趋势（柱状图）
+  const hasTrend = st.days.some((d) => d.score !== null);
+  if (hasTrend) {
+    const bars = st.days
+      .map((d) => {
+        const h = d.score === null ? 0 : ((d.score - 40) / 60) * 100;
+        return `<div class="bar-col">
+          <div class="bar" style="height:${Math.max(h, d.score ? 6 : 0)}%" title="${d.score ?? ""}"></div>
+          <div class="bar-label">${d.label}</div>
+        </div>`;
+      })
+      .join("");
+    html += `
+      <div class="stats-section-label">最近 14 天平均分</div>
+      <div class="trend-chart">${bars}</div>`;
+  }
+
+  // 问题触发率（本周）
+  if (st.faultStats.length) {
+    html += `<div class="stats-section-label">问题触发率（本周）</div>`;
+    html += st.faultStats
+      .slice(0, 8)
+      .map((f) => {
+        const pct = Math.round(f.now * 100);
+        const arrow =
+          f.prev === null ? "" : f.now < f.prev ? "<span class='fr-down'>↓</span>" : f.now > f.prev ? "<span class='fr-up'>↑</span>" : "";
+        return `
+        <div class="fault-rate">
+          <span class="fr-name">${f.rule.title}</span>
+          <div class="fr-bar"><div class="fr-fill" style="width:${pct}%"></div></div>
+          <span class="fr-pct">${pct}% ${arrow}</span>
+        </div>`;
+      })
+      .join("");
+  }
+
+  html += `<p class="stats-foot">共记录 ${st.total} 次挥杆 · 数据仅保存在本机</p>`;
+  body.innerHTML = html;
+}
 
 /* ---------- 语音设置面板 ---------- */
 
