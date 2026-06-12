@@ -36,6 +36,9 @@ let recorder = null;          // 实时模式：MediaRecorder
 let recChunks = [];
 let replayUrl = null;         // 实时模式：回放 blob URL
 const replaySegment = { start: 0, end: 0 }; // 视频模式：挥杆起止时间点
+// 视频模式：整段视频中检测到的每次完整挥杆（试挥+正式击球）。
+// 看完全片后只报告最后一次——实拍素材里正式击球几乎总是最后一挥。
+const videoSwings = [];
 
 /* ---------------- 初始化 ---------------- */
 
@@ -200,15 +203,50 @@ async function exitFileMode() {
 
 video.addEventListener("ended", () => {
   if (state.source !== "file" || !state.running) return;
-  // 视频放完但还没自然收杆：强制出报告
+  // 片尾若正处于挥杆中（正式击球被剪到结尾），强制收束成一次挥杆
   replaySegment.end = video.duration || video.currentTime;
-  const summary = analyzer.finalize();
-  if (summary) showSummary(summary);
+  const tail = analyzer.finalize();
+  if (tail) videoSwings.push(packSwing(tail));
+
+  // 只报告最后一次挥杆：试挥/热身动作在前，正式击球几乎总是最后一挥
+  const chosen = videoSwings[videoSwings.length - 1];
+  if (chosen) {
+    restoreSwing(chosen);
+    showSummary(chosen.summary, videoSwings.length);
+  } else if (analyzer.phase !== PHASE.FINISH) {
+    showHint("视频中未识别到完整挥杆，请确认全身入镜且机位选择正确", 5000);
+  }
   stopAnalysis();
   $("phasePill").textContent = "播放结束";
-  if (!summary && analyzer.phase !== PHASE.FINISH)
-    showHint("视频中未识别到完整挥杆，请确认全身入镜且机位选择正确", 5000);
 });
+
+/** 打包/恢复一次挥杆的全部展示数据（报告、问题截图、关键帧、回放区间） */
+function packSwing(summary) {
+  return {
+    summary,
+    snapshots: new Map(snapshots),
+    keyframes: new Map(keyframes),
+    segment: { ...replaySegment },
+  };
+}
+
+function restoreSwing(sw) {
+  snapshots.clear();
+  for (const [k, v] of sw.snapshots) snapshots.set(k, v);
+  keyframes.clear();
+  for (const [k, v] of sw.keyframes) keyframes.set(k, v);
+  replaySegment.start = sw.segment.start;
+  replaySegment.end = sw.segment.end;
+}
+
+function resetPerSwing() {
+  snapshots.clear();
+  keyframes.clear();
+  prevPhase = PHASE.IDLE;
+  baselineAnnounced = false;
+  replaySegment.start = 0;
+  replaySegment.end = 0;
+}
 
 /* ---------------- 推理主循环 ---------------- */
 
@@ -252,15 +290,23 @@ function loop() {
       }
     }
     if (summary) {
-      if (state.source === "file") replaySegment.end = video.currentTime + 0.3;
-      coach.say(
-        summary.faults.length
-          ? "挥杆完成，来看一下分析报告"
-          : "漂亮，这一杆没有明显问题",
-        "summary",
-        2000
-      );
-      showSummary(summary);
+      if (state.source === "file") {
+        // 上传视频：静默存档这次挥杆（可能只是试挥），看完整段视频后
+        // 由 ended 事件统一报告最后一次挥杆
+        replaySegment.end = video.currentTime + 0.3;
+        videoSwings.push(packSwing(summary));
+        resetPerSwing();
+        analyzer.nextSwing();
+      } else {
+        coach.say(
+          summary.faults.length
+            ? "挥杆完成，来看一下分析报告"
+            : "漂亮，这一杆没有明显问题",
+          "summary",
+          2000
+        );
+        showSummary(summary);
+      }
     }
   }
 
@@ -286,10 +332,8 @@ async function startAnalysis() {
     }
   }
   analyzer = new SwingAnalyzer(state.view, state.handedness);
-  snapshots.clear();
-  keyframes.clear();
-  prevPhase = PHASE.IDLE;
-  baselineAnnounced = false;
+  resetPerSwing();
+  videoSwings.length = 0;
   discardRecorder();
   cleanupReplay();
   coach.unlock(); // 借用户点击手势解锁 iOS 语音
@@ -352,8 +396,15 @@ function renderLiveFaults(keys, phase, lms) {
   box.innerHTML = chips.join("");
 }
 
-function showSummary(summary) {
+function showSummary(summary, swingCount = 1) {
   saveSwing(summary, state.source); // 存入练习历史（仅元数据，不含视频）
+  const note = $("summaryNote");
+  if (swingCount > 1) {
+    note.textContent = `视频中检测到 ${swingCount} 次挥杆动作 · 已分析最后一次（通常为正式击球）`;
+    note.classList.remove("hidden");
+  } else {
+    note.classList.add("hidden");
+  }
   const { score, faults, tempo } = summary;
   const scoreEl = $("summaryScore");
   scoreEl.textContent = score + " 分";
@@ -539,10 +590,8 @@ $("startBtn").addEventListener("click", () => {
 $("closeSummary").addEventListener("click", () => {
   $("summaryModal").classList.add("hidden");
   analyzer.nextSwing();
-  snapshots.clear();
-  keyframes.clear();
-  prevPhase = PHASE.IDLE;
-  baselineAnnounced = false;
+  resetPerSwing();
+  videoSwings.length = 0;
   cleanupReplay();
   if (state.running && state.source === "camera")
     showHint("摆好准备姿势，开始下一次挥杆", 3000);
