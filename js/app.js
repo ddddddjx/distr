@@ -28,6 +28,13 @@ let analyzer = new SwingAnalyzer(state.view, state.handedness);
 // 每次挥杆中各问题首次出现瞬间的截图（报告中展示）
 const snapshots = new Map();
 let baselineAnnounced = false;
+// 关键位置帧（准备/顶点/击球/收杆）与慢放回放
+const keyframes = new Map();
+let prevPhase = PHASE.IDLE;
+let recorder = null;          // 实时模式：MediaRecorder
+let recChunks = [];
+let replayUrl = null;         // 实时模式：回放 blob URL
+const replaySegment = { start: 0, end: 0 }; // 视频模式：挥杆起止时间点
 
 /* ---------------- 初始化 ---------------- */
 
@@ -173,6 +180,7 @@ async function exitFileMode() {
 video.addEventListener("ended", () => {
   if (state.source !== "file" || !state.running) return;
   // 视频放完但还没自然收杆：强制出报告
+  replaySegment.end = video.duration || video.currentTime;
   const summary = analyzer.finalize();
   if (summary) showSummary(summary);
   stopAnalysis();
@@ -195,10 +203,23 @@ function loop() {
     renderPhase(phase);
     renderLiveFaults(liveFaults, phase, lms);
 
-    // 准备姿势锁定后语音提示开始（仅实时模式）
+    // 准备姿势锁定：语音提示、截"准备"关键帧、实时模式开始录制回放
     if (!baselineAnnounced && analyzer.baseline) {
       baselineAnnounced = true;
-      if (state.source === "camera") coach.say("姿势就位，开始挥杆吧", "ready", 2000);
+      captureKeyframe("address", lms, mirrored);
+      if (state.source === "camera") {
+        coach.say("姿势就位，开始挥杆吧", "ready", 2000);
+        startRecorder();
+      }
+    }
+    // 阶段切换：截关键帧、记录视频模式的挥杆起点
+    if (phase !== prevPhase) {
+      if (phase === PHASE.BACKSWING && state.source === "file")
+        replaySegment.start = Math.max(0, video.currentTime - 1);
+      if (phase === PHASE.TOP) captureKeyframe("top", lms, mirrored);
+      if (phase === PHASE.IMPACT) captureKeyframe("impact", lms, mirrored);
+      if (phase === PHASE.FINISH) captureKeyframe("finish", lms, mirrored);
+      prevPhase = phase;
     }
     // 实时问题：语音播报 + 截取问题瞬间画面
     for (const key of liveFaults) {
@@ -210,6 +231,7 @@ function loop() {
       }
     }
     if (summary) {
+      if (state.source === "file") replaySegment.end = video.currentTime + 0.3;
       coach.say(
         summary.faults.length
           ? "挥杆完成，来看一下分析报告"
@@ -244,7 +266,11 @@ async function startAnalysis() {
   }
   analyzer = new SwingAnalyzer(state.view, state.handedness);
   snapshots.clear();
+  keyframes.clear();
+  prevPhase = PHASE.IDLE;
   baselineAnnounced = false;
+  discardRecorder();
+  cleanupReplay();
   coach.unlock(); // 借用户点击手势解锁 iOS 语音
   state.running = true;
   const btn = $("startBtn");
@@ -265,6 +291,7 @@ function stopAnalysis() {
   if (!state.running) return;
   state.running = false;
   coach.stop();
+  discardRecorder();
   cancelAnimationFrame(state.rafId);
   if (state.source === "file") video.pause();
   const btn = $("startBtn");
@@ -305,11 +332,15 @@ function renderLiveFaults(keys, phase, lms) {
 }
 
 function showSummary(summary) {
-  const { score, faults } = summary;
+  const { score, faults, tempo } = summary;
   const scoreEl = $("summaryScore");
   scoreEl.textContent = score + " 分";
   scoreEl.className =
     "score " + (score >= 85 ? "s-good" : score >= 65 ? "s-mid" : "s-bad");
+
+  renderTempo(tempo);
+  showReplay();
+  renderKeyframes();
 
   const body = $("summaryBody");
   if (faults.length === 0) {
@@ -341,6 +372,125 @@ function faultCardHtml(f) {
     </div>`;
 }
 
+/* ---------- 回放 / 关键帧 / 节奏 ---------- */
+
+function captureKeyframe(key, lms, mirrored) {
+  if (!lms || keyframes.has(key)) return;
+  const shot = detector.snapshot(video, lms, mirrored, 360);
+  if (shot) keyframes.set(key, shot);
+}
+
+function renderKeyframes() {
+  const order = [
+    ["address", "准备"],
+    ["top", "顶点"],
+    ["impact", "击球"],
+    ["finish", "收杆"],
+  ];
+  const cells = order
+    .filter(([k]) => keyframes.has(k))
+    .map(
+      ([k, label]) =>
+        `<figure class="kf"><img src="${keyframes.get(k)}" alt="${label}" /><figcaption>${label}</figcaption></figure>`
+    );
+  const wrap = $("keyframesWrap");
+  wrap.innerHTML = cells.join("");
+  wrap.classList.toggle("hidden", cells.length === 0);
+}
+
+function renderTempo(tempo) {
+  const el = $("summaryTempo");
+  if (!tempo) { el.classList.add("hidden"); return; }
+  const r = tempo.ratio;
+  el.innerHTML =
+    `节奏 <b>${r.toFixed(1)} : 1</b> · 上杆 ${(tempo.back / 1000).toFixed(2)}s / ` +
+    `下杆 ${(tempo.down / 1000).toFixed(2)}s（职业参考 3:1）`;
+  el.classList.toggle("good", r >= 2.4 && r <= 3.6);
+  el.classList.remove("hidden");
+}
+
+/** 实时模式：基准锁定后开始录制本次挥杆 */
+function startRecorder() {
+  if (!state.stream || !window.MediaRecorder || recorder) return;
+  const mime =
+    ["video/mp4", "video/webm;codecs=vp9", "video/webm"].find((t) =>
+      MediaRecorder.isTypeSupported(t)
+    ) || "";
+  try {
+    recChunks = [];
+    recorder = new MediaRecorder(state.stream, mime ? { mimeType: mime } : undefined);
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+    recorder.start();
+  } catch {
+    recorder = null;
+  }
+}
+
+/** 实时模式：收杆后停止录制并把回放装进报告 */
+function stopRecorderToReplay() {
+  if (!recorder || recorder.state === "inactive") { recorder = null; return; }
+  const mimeType = recorder.mimeType;
+  recorder.onstop = () => {
+    if (replayUrl) URL.revokeObjectURL(replayUrl);
+    const blob = new Blob(recChunks, { type: mimeType || recChunks[0]?.type || "video/webm" });
+    recChunks = [];
+    if (!blob.size) return;
+    replayUrl = URL.createObjectURL(blob);
+    const rv = $("replayVideo");
+    rv.onloadeddata = () => { rv.playbackRate = 0.4; };
+    rv.ontimeupdate = null;
+    rv.src = replayUrl;
+    rv.classList.remove("hidden");
+    rv.play().catch(() => {});
+  };
+  try { recorder.stop(); } catch { /* 忽略 */ }
+  recorder = null;
+}
+
+function discardRecorder() {
+  if (recorder) {
+    recorder.onstop = null;
+    try { recorder.stop(); } catch { /* 忽略 */ }
+    recorder = null;
+  }
+  recChunks = [];
+}
+
+function showReplay() {
+  const rv = $("replayVideo");
+  if (state.source === "camera") {
+    stopRecorderToReplay(); // 异步装载，onstop 后自动显示
+    return;
+  }
+  // 视频模式：对原视频做挥杆区间慢放循环
+  if (!state.fileUrl || !replaySegment.end) return;
+  const { start, end } = replaySegment;
+  rv.src = state.fileUrl;
+  rv.onloadeddata = () => {
+    rv.currentTime = start;
+    rv.playbackRate = 0.4;
+    rv.play().catch(() => {});
+  };
+  rv.ontimeupdate = () => {
+    if (rv.currentTime > end) rv.currentTime = start;
+  };
+  rv.classList.remove("hidden");
+}
+
+function cleanupReplay() {
+  const rv = $("replayVideo");
+  rv.pause();
+  rv.ontimeupdate = null;
+  rv.onloadeddata = null;
+  rv.removeAttribute("src");
+  rv.classList.add("hidden");
+  if (replayUrl) { URL.revokeObjectURL(replayUrl); replayUrl = null; }
+  replaySegment.start = 0;
+  replaySegment.end = 0;
+  $("keyframesWrap").classList.add("hidden");
+  $("summaryTempo").classList.add("hidden");
+}
+
 let hintTimer = 0;
 function showHint(text, ms = 3000) {
   const el = $("hint");
@@ -367,7 +517,10 @@ $("closeSummary").addEventListener("click", () => {
   $("summaryModal").classList.add("hidden");
   analyzer.nextSwing();
   snapshots.clear();
+  keyframes.clear();
+  prevPhase = PHASE.IDLE;
   baselineAnnounced = false;
+  cleanupReplay();
   if (state.running && state.source === "camera")
     showHint("摆好准备姿势，开始下一次挥杆", 3000);
 });

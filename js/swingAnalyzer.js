@@ -81,6 +81,8 @@ export class SwingAnalyzer {
     this.topReachedAt = 0;
     this.finishStillSince = 0;
     this.targetDir = 0;         // +1 / -1：目标方向（由上杆方向反推，免疫镜像）
+    this.tBackswing = 0;        // 节奏计时：上杆开始 / 击球时刻
+    this.tImpact = 0;
     this.bsPath = [];           // 上杆手部路径（OTT 判定用）
     this.ottCount = 0;
     this.faultsThisSwing = new Map(); // ruleKey -> { ratio, phase }
@@ -174,6 +176,7 @@ export class SwingAnalyzer {
         // 手回到基准高度附近 → 击球区
         if (f.hands.y > this.baseline.hands.y - 0.15) {
           this.phase = PHASE.IMPACT;
+          this.tImpact = tMs;
           this._checkImpact(lms, f);
         }
         break;
@@ -220,7 +223,7 @@ export class SwingAnalyzer {
   _collectBaseline(lms, f, tMs) {
     if (this.baseline) {
       // 基准已锁定：手明显抬高即进入上杆，小幅晃动则继续保持准备状态
-      if (f.hands.y < this.baseline.hands.y - 0.08) this._beginBackswing(f);
+      if (f.hands.y < this.baseline.hands.y - 0.08) this._beginBackswing(f, tMs);
       return;
     }
     if (Math.abs(this.handsVelY) > 0.024) {
@@ -249,8 +252,9 @@ export class SwingAnalyzer {
     }
   }
 
-  _beginBackswing(f) {
+  _beginBackswing(f, tMs) {
     this.phase = PHASE.BACKSWING;
+    this.tBackswing = tMs;
     // 上杆时手远离目标 → 反推目标方向（与镜像、左右手均无关）
     this.targetDir = f.hands.x > this.baseline.hands.x ? -1 : 1;
     // 侧面视角记录上杆手部路径，下杆时对比判定 Over-the-Top
@@ -388,7 +392,14 @@ export class SwingAnalyzer {
       return Math.round(min + (max - min) * t);
     };
     const score = Math.max(40, 100 - faults.reduce((s, f) => s + deduction(f), 0));
-    this.summary = { score, faults, view: this.view };
+    // 节奏（Tempo）：上杆时长 : 下杆时长，职业球员稳定在 3:1 附近
+    let tempo = null;
+    if (this.tBackswing && this.topReachedAt && this.tImpact) {
+      const back = this.topReachedAt - this.tBackswing;
+      const down = this.tImpact - this.topReachedAt;
+      if (back > 100 && down > 50) tempo = { back, down, ratio: back / down };
+    }
+    this.summary = { score, faults, view: this.view, tempo };
   }
 
   /** 视频播放结束等场景下强制结束本次挥杆：已进入挥杆阶段则直接生成报告 */
