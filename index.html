@@ -64,6 +64,18 @@
       </div>
     </div>
 
+    <!-- 模式选择页：摄像头仅在用户明确选择实时模式后才开启 -->
+    <div id="chooser" class="modal hidden">
+      <div class="modal-card">
+        <div class="brand chooser-brand"><span class="brand-dot"></span>SwingCoach</div>
+        <h2>选择使用方式</h2>
+        <button id="chooseLive" class="primary big">实时拍摄分析</button>
+        <p class="choose-note">开启摄像头对着球员拍摄，挥杆时实时语音指导</p>
+        <button id="chooseUpload" class="ghost big">上传视频分析</button>
+        <p class="choose-note">从相册选择已拍好的挥杆视频，无需开启摄像头</p>
+      </div>
+    </div>
+
     <!-- 语音设置面板 -->
     <div id="voiceModal" class="modal hidden">
       <div class="modal-card">

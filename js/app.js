@@ -57,7 +57,14 @@ async function boot() {
     $("loading").querySelector(".spinner")?.remove();
     return;
   }
+  // 不自动开启摄像头：让用户先选择实时拍摄还是上传视频
+  $("loading").classList.add("hidden");
+  $("chooser").classList.remove("hidden");
+}
+
+async function startLiveMode() {
   $("loadingText").textContent = "正在打开摄像头…";
+  $("loading").classList.remove("hidden");
   try {
     await openCamera();
     $("loading").classList.add("hidden");
@@ -587,12 +594,27 @@ function renderVoiceList() {
     : `<div class="voice-empty">当前浏览器没有可用的中文语音。iPhone 可在 设置 → 辅助功能 → 朗读内容 → 声音 中下载；安卓需安装系统 TTS 引擎。</div>`;
 }
 
+$("chooseLive").addEventListener("click", () => {
+  $("chooser").classList.add("hidden");
+  startLiveMode();
+});
+
+$("chooseUpload").addEventListener("click", () => {
+  $("chooser").classList.add("hidden");
+  $("videoInput").click();
+});
+
 $("uploadBtn").addEventListener("click", () => $("videoInput").click());
 
 $("videoInput").addEventListener("change", (e) => {
   const file = e.target.files && e.target.files[0];
   if (file) enterFileMode(file);
   e.target.value = ""; // 允许重复选择同一个文件
+});
+
+// 在选择页点了上传又取消选择 → 回到选择页（此时没有任何画面来源）
+$("videoInput").addEventListener("cancel", () => {
+  if (!state.stream && !state.fileUrl) $("chooser").classList.remove("hidden");
 });
 
 $("flipBtn").addEventListener("click", async () => {
