@@ -61,7 +61,7 @@ async function boot() {
   try {
     await openCamera();
     $("loading").classList.add("hidden");
-    showHint(hintForView(), 4000);
+    if (state.source === "camera") showHint(hintForView(), 4000);
   } catch (err) {
     // 相机失败不阻塞应用：上传视频分析仍然可用
     $("loading").classList.add("hidden");
@@ -79,9 +79,14 @@ function cameraErrorMessage(err) {
   return "摄像头打开失败（" + (err?.message || err) + "）。可改用「上传视频」分析。";
 }
 
+// 摄像头打开的会话序号：进入视频模式后，迟到返回的 getUserMedia 结果会被作废，
+// 避免上传视频路径中摄像头被悄悄重新激活（表现为"自动录像"）
+let camSeq = 0;
+
 async function openCamera() {
   stopMediaSources();
   state.source = "camera";
+  const seq = ++camSeq;
   if (!navigator.mediaDevices?.getUserMedia)
     throw new Error("当前浏览器环境不支持摄像头 API");
 
@@ -92,9 +97,10 @@ async function openCamera() {
     true,
   ];
   let lastErr = null;
+  let stream = null;
   for (const c of constraintTries) {
     try {
-      state.stream = await withTimeout(
+      stream = await withTimeout(
         navigator.mediaDevices.getUserMedia({ audio: false, video: c }),
         8000,
         "打开摄像头超时"
@@ -106,7 +112,13 @@ async function openCamera() {
       if (e?.name === "NotAllowedError" || e?.name === "PermissionDeniedError") throw e;
     }
   }
-  if (!state.stream) throw lastErr || new Error("无法获取摄像头");
+  // 等待期间用户已切到上传视频模式：作废本次打开，立即释放摄像头
+  if (seq !== camSeq || state.source !== "camera") {
+    stream?.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  if (!stream) throw lastErr || new Error("无法获取摄像头");
+  state.stream = stream;
 
   video.srcObject = state.stream;
   video.classList.toggle("mirrored", state.facing === "user");
@@ -151,6 +163,7 @@ window.addEventListener("resize", resizeOverlay);
 
 async function enterFileMode(file) {
   stopAnalysis();
+  camSeq++; // 作废任何还在等待中的摄像头打开请求
   stopMediaSources();
   state.source = "file";
   state.fileUrl = URL.createObjectURL(file);
@@ -409,8 +422,9 @@ function renderTempo(tempo) {
   el.classList.remove("hidden");
 }
 
-/** 实时模式：基准锁定后开始录制本次挥杆 */
+/** 实时模式：基准锁定后开始录制本次挥杆（仅相机模式，双重保险） */
 function startRecorder() {
+  if (state.source !== "camera") return;
   if (!state.stream || !window.MediaRecorder || recorder) return;
   const mime =
     ["video/mp4", "video/webm;codecs=vp9", "video/webm"].find((t) =>
