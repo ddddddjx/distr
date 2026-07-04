@@ -583,8 +583,26 @@ function hintForView() {
 /* ---------------- 交互 ---------------- */
 
 $("startBtn").addEventListener("click", () => {
-  if (state.running) stopAnalysis();
-  else startAnalysis();
+  if (!state.running) {
+    startAnalysis();
+    return;
+  }
+  if (state.source === "camera") {
+    // 用户主动停止：不静默丢弃——已进入挥杆阶段则强制收束出报告
+    const summary = analyzer.finalize();
+    if (summary) {
+      showSummary(summary); // 内部会先取走录制的回放，再停止
+      stopAnalysis();
+    } else {
+      stopAnalysis();
+      showHint(
+        "本次未检测到完整挥杆。提示：摆好准备姿势静止 1 秒再挥杆，收杆后保持姿势片刻，报告会自动弹出",
+        6000
+      );
+    }
+  } else {
+    stopAnalysis();
+  }
 });
 
 $("closeSummary").addEventListener("click", () => {
