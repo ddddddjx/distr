@@ -81,6 +81,7 @@ export class SwingAnalyzer {
     this.topReachedAt = 0;
     this.finishStillSince = 0;
     this.targetDir = 0;         // +1 / -1：目标方向（由上杆方向反推，免疫镜像）
+    this.maxRise = 0;           // 本次动作中手的最大上抬幅度（躯干单位），用于过滤小动作
     this.tBackswing = 0;        // 节奏计时：上杆开始 / 击球时刻
     this.tImpact = 0;
     this.bsPath = [];           // 上杆手部路径（OTT 判定用）
@@ -144,6 +145,10 @@ export class SwingAnalyzer {
 
     if (this.lastHandsY !== null) this.handsVelY = f.hands.y - this.lastHandsY;
     this.lastHandsY = f.hands.y;
+    // 记录本次动作的最大上抬幅度（收束时用于过滤准备中的小动作）
+    if (this.baseline && this.phase !== PHASE.IDLE && this.phase !== PHASE.ADDRESS) {
+      this.maxRise = Math.max(this.maxRise, this.baseline.hands.y - f.hands.y);
+    }
 
     switch (this.phase) {
       case PHASE.IDLE:
@@ -160,9 +165,8 @@ export class SwingAnalyzer {
           this.topReachedAt = tMs;
           this._checkTop(lms, f);
         } else if (f.hands.y > this.baseline.hands.y - 0.05) {
-          // 上杆中途收回（取消试挥）→ 回到准备状态，保留基准
-          this.phase = PHASE.ADDRESS;
-          this.faultsThisSwing.clear();
+          // 上杆中途收回（准备小动作/取消试挥）→ 静默回到准备状态
+          this._abortSwing();
         }
         break;
       case PHASE.TOP:
@@ -222,8 +226,14 @@ export class SwingAnalyzer {
 
   _collectBaseline(lms, f, tMs) {
     if (this.baseline) {
-      // 基准已锁定：手明显抬高即进入上杆，小幅晃动则继续保持准备状态
-      if (f.hands.y < this.baseline.hands.y - 0.08) this._beginBackswing(f, tMs);
+      // 基准已锁定：手明显抬高且带有明确向上速度才算上杆——
+      // 压杆、举杆检查、waggle 等准备小动作（幅度通常 <0.15）不触发
+      if (
+        f.hands.y < this.baseline.hands.y - 0.15 &&
+        this.handsVelY < -0.008
+      ) {
+        this._beginBackswing(f, tMs);
+      }
       return;
     }
     if (Math.abs(this.handsVelY) > 0.024) {
@@ -372,7 +382,25 @@ export class SwingAnalyzer {
 
   /* ---------- 收杆 → 生成报告 ---------- */
 
+  /** 判定为无效动作（幅度不足的准备小动作）：静默回到准备状态，不出报告 */
+  _abortSwing() {
+    this.phase = PHASE.ADDRESS;
+    this.faultsThisSwing.clear();
+    this.bsPath = [];
+    this.ottCount = 0;
+    this.finishStillSince = 0;
+    this.maxRise = 0;
+    this.tBackswing = 0;
+    this.tImpact = 0;
+  }
+
   _finishSwing() {
+    // 最终校验：真实挥杆（哪怕半挥）手的最大上抬幅度 ≥0.45 躯干单位；
+    // 举杆检查、waggle 等小动作达不到 → 作废，不产生报告
+    if (this.maxRise < 0.45) {
+      this._abortSwing();
+      return;
+    }
     this.phase = PHASE.FINISH;
     const faults = [...this.faultsThisSwing.entries()]
       .map(([key, v]) => ({ key, rule: RULES[key], ...v }))
