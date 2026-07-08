@@ -1,0 +1,12 @@
+{
+  "name": "swingcoach",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:smoke": "node tests/run-video-test.mjs",
+    "test:video": "node tests/run-video-test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
