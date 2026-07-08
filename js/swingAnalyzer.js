@@ -127,6 +127,20 @@ export class SwingAnalyzer {
       shoulderW: dist(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]) / torso,
       spine: spineAngleFromVertical(lms),
       lean: spineLeanSigned(lms),
+      torso, // 当前帧躯干投影长度（画面单位），供稳定性判定换算回原始尺度
+    };
+  }
+
+  /**
+   * 髋部相对基准的位移，以【基准】躯干长度为单位。
+   * 注意不能直接用归一化坐标相减：挥杆转体时躯干 2D 投影会缩短 20-30%，
+   * 会让按当前帧归一化的数值虚假膨胀，把真实挥杆误判成起身/走动。
+   */
+  _hipDevFrom(f) {
+    const b = this.baseline;
+    return {
+      dx: Math.abs(f.hip.x * f.torso - b.hip.x * b.torso) / b.torso,
+      dy: Math.abs(f.hip.y * f.torso - b.hip.y * b.torso) / b.torso,
     };
   }
 
@@ -151,7 +165,7 @@ export class SwingAnalyzer {
     if (this.baseline && this.phase !== PHASE.IDLE && this.phase !== PHASE.ADDRESS) {
       this.maxRise = Math.max(this.maxRise, this.baseline.hands.y - f.hands.y);
       // 髋部稳定性闸门：髋部大幅升降 = 弯腰/起身/走动，不是挥杆
-      const hipDev = Math.abs(f.hip.y - this.baseline.hip.y);
+      const hipDev = this._hipDevFrom(f).dy;
       this.maxHipDev = Math.max(this.maxHipDev, hipDev);
       if (hipDev > 0.5) {
         this._reacquire();
@@ -236,10 +250,8 @@ export class SwingAnalyzer {
   _collectBaseline(lms, f, tMs) {
     if (this.baseline) {
       // 球员离开准备位（走动/弯腰摆球/大幅调整站位）→ 旧基准作废，重新采集
-      if (
-        Math.abs(f.hip.y - this.baseline.hip.y) > 0.35 ||
-        Math.abs(f.hip.x - this.baseline.hip.x) > 0.6
-      ) {
+      const dev = this._hipDevFrom(f);
+      if (dev.dy > 0.35 || dev.dx > 0.6) {
         this._reacquire();
         return;
       }
@@ -272,12 +284,14 @@ export class SwingAnalyzer {
         shoulder: avgP("shoulder"), head: avgP("head"),
         shoulderW: avg("shoulderW"),
         spine: avg("spine"), lean: avg("lean"),
+        torso: avg("torso"),
         // 侧面视角：球的方向 = 准备姿势时手相对髋的方向（用于 OTT 判定）
         ballDir: Math.sign(avgP("hands").x - avgP("hip").x) || 1,
       };
-      // 站姿合理性校验：髋-踝距离（腿长）不足 1 个躯干 = 蹲姿/坐姿
-      // （弯腰摆球时的短暂静止），不是击球准备姿势
-      if (this.useAnkleAnchor && Math.abs(this.baseline.hip.y) < 1.0) {
+      // 站姿合理性校验：髋-踝距离（腿长）明显小于躯干 = 蹲姿/坐姿
+      // （弯腰摆球时的短暂静止），不是击球准备姿势。
+      // 阈值取 0.85：兼容手机俯拍等透视压缩腿长的常见机位
+      if (this.useAnkleAnchor && Math.abs(this.baseline.hip.y) < 0.85) {
         this.baseline = null;
         this.addressFrames = [];
         this.phase = PHASE.IDLE;
