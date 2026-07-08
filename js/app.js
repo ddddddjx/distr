@@ -324,7 +324,10 @@ function loop() {
       const rule = RULES[key];
       if (rule?.voice) coach.say(rule.voice, key, 7000);
       if (lms && !snapshots.has(key)) {
-        const shot = detector.snapshot(video, lms, mirrored);
+        // 带可视化标注的问题截图：红=当前动作，绿虚线=正确参考
+        const shot = detector.snapshot(
+          video, lms, mirrored, 480, analyzer.annotations.get(key)
+        );
         if (shot) snapshots.set(key, shot);
       }
     }

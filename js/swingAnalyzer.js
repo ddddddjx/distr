@@ -93,6 +93,9 @@ export class SwingAnalyzer {
     this.faultsThisSwing = new Map(); // ruleKey -> { ratio, phase }
     this.liveFaults = [];
     this.summary = null;
+    // ruleKey -> { label, shapes }：问题截图上的可视化标注
+    // （红=当前错误位置，绿虚线=正确参考），坐标为图像空间 0..1
+    this.annotations = new Map();
   }
 
   get leadSide() {
@@ -120,6 +123,9 @@ export class SwingAnalyzer {
     const anchor = this.useAnkleAnchor
       ? mid(lms[LM.L_ANKLE], lms[LM.R_ANKLE])
       : { x: 0, y: 0 };
+    // 供标注绘制用：把归一化坐标换算回当前帧的图像坐标
+    this._anchor = anchor;
+    this._torso = torso;
     const n = (p) => ({ x: (p.x - anchor.x) / torso, y: (p.y - anchor.y) / torso });
     return {
       hands: n(mid(lms[LM.L_WRIST], lms[LM.R_WRIST])),
@@ -338,17 +344,49 @@ export class SwingAnalyzer {
     this.liveFaults.push(key);
   }
 
+  /* ---------- 可视化标注（画在问题瞬间的截图上） ---------- */
+
+  /** 归一化坐标 → 当前帧图像坐标（含镜头运动补偿的一致换算） */
+  _img(p) {
+    return { x: this._anchor.x + p.x * this._torso, y: this._anchor.y + p.y * this._torso };
+  }
+
+  _annotate(key, label, shapes) {
+    this.annotations.set(key, { label, shapes });
+  }
+
+  /** 竖直参考虚线（绿）+ 从基准位置指向当前位置的箭头（红） */
+  _shiftShapes(basePt, curPt) {
+    const t = this._torso;
+    return [
+      { type: "line", a: { x: basePt.x, y: basePt.y - 0.9 * t }, b: { x: basePt.x, y: basePt.y + 0.9 * t }, color: "green", dash: true },
+      { type: "arrow", a: { x: basePt.x, y: curPt.y }, b: curPt, color: "red" },
+    ];
+  }
+
   _checkAddress(lms) {
     if (this.view !== "side") return;
-    const spine = this.baseline.spine;
-    if (spine < 20) this._record("SPINE_TOO_UPRIGHT", 1 + (20 - spine) / 15);
-    else if (spine > 50) this._record("SPINE_TOO_BENT", 1 + (spine - 50) / 15);
-    // TPI C-Posture：颈部（耳-肩连线）相对脊柱明显前探 → 圆肩驼背
     const ear = mid(lms[LM.L_EAR], lms[LM.R_EAR]);
     const sh = mid(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]);
+    const hp = mid(lms[LM.L_HIP], lms[LM.R_HIP]);
+    const bodyLine = [
+      { type: "path", pts: [ear, sh, hp], color: "red" },
+    ];
+    const spine = this.baseline.spine;
+    if (spine < 20) {
+      this._record("SPINE_TOO_UPRIGHT", 1 + (20 - spine) / 15);
+      this._annotate("SPINE_TOO_UPRIGHT", "红线=你的上身，几乎笔直站着：屁股向后坐、上身向前倾", bodyLine);
+    } else if (spine > 50) {
+      this._record("SPINE_TOO_BENT", 1 + (spine - 50) / 15);
+      this._annotate("SPINE_TOO_BENT", "红线=你的上身，压得太低：稍微抬起来，手臂能自然垂下就好", bodyLine);
+    }
+    // TPI C-Posture：颈部（耳-肩连线）相对脊柱明显前探 → 圆肩驼背
     const neckAng =
       (Math.atan2(Math.abs(ear.x - sh.x), Math.abs(ear.y - sh.y)) * 180) / Math.PI;
-    if (neckAng - spine > 25) this._record("C_POSTURE", (neckAng - spine) / 25);
+    if (neckAng - spine > 25) {
+      this._record("C_POSTURE", (neckAng - spine) / 25);
+      this._annotate("C_POSTURE", "红线弓成了 C 形（头前探、背拱起）：挺胸收下巴，背拉平", bodyLine);
+    }
   }
 
   _checkBackswing(lms, f) {
@@ -359,11 +397,27 @@ export class SwingAnalyzer {
     } else {
       const headDx = Math.abs(f.head.x - b.head.x);
       const headLimit = 0.55 * b.shoulderW;
-      if (headDx > headLimit) this._record("HEAD_SWAY", headDx / headLimit);
+      if (headDx > headLimit) {
+        this._record("HEAD_SWAY", headDx / headLimit);
+        const baseHead = this._img(b.head), curHead = lms[LM.NOSE];
+        const r = 0.16 * this._torso;
+        this._annotate("HEAD_SWAY", "绿圈=开球时头的位置，红圈=现在：身体在平移，应该原地转", [
+          { type: "circle", c: baseHead, r, color: "green", dash: true },
+          { type: "circle", c: curHead, r, color: "red" },
+          { type: "arrow", a: baseHead, b: curHead, color: "red" },
+        ]);
+      }
       // 髋部向"远离目标"方向平移过多 = 摇摆
       const sway = (f.hip.x - b.hip.x) * -this.targetDir;
       const swayLimit = 0.42 * b.shoulderW;
-      if (sway > swayLimit) this._record("HIP_SWAY", sway / swayLimit);
+      if (sway > swayLimit) {
+        this._record("HIP_SWAY", sway / swayLimit);
+        this._annotate(
+          "HIP_SWAY",
+          "胯部横移出了绿线（应原地转动）：上杆时后脚顶住，别让胯跟着跑",
+          this._shiftShapes(this._img(b.hip), mid(lms[LM.L_HIP], lms[LM.R_HIP]))
+        );
+      }
     }
   }
 
@@ -371,12 +425,34 @@ export class SwingAnalyzer {
     if (this.view !== "front") return;
     // 顶点时上身应略微远离目标；倒向目标 = 逆向脊柱倾斜
     const lean = (f.lean - this.baseline.lean) * this.targetDir;
-    if (lean > 8) this._record("REVERSE_SPINE", lean / 8);
+    const shC = mid(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]);
+    const hpC = mid(lms[LM.L_HIP], lms[LM.R_HIP]);
+    if (lean > 8) {
+      this._record("REVERSE_SPINE", lean / 8);
+      this._annotate("REVERSE_SPINE", "红线=你的上身，倒向了打球方向：顶点时应贴着绿线或略偏后", [
+        { type: "line", a: { x: hpC.x, y: hpC.y - 1.1 * this._torso }, b: hpC, color: "green", dash: true },
+        { type: "line", a: hpC, b: shC, color: "red" },
+      ]);
+    }
     // TPI Flat Shoulder Plane：顶点双肩连线应明显倾斜（前导肩低于后肩）
     const ls = lms[LM.L_SHOULDER], rs = lms[LM.R_SHOULDER];
     const tilt =
       (Math.atan2(Math.abs(ls.y - rs.y), Math.abs(ls.x - rs.x) || 1e-6) * 180) / Math.PI;
-    if (tilt < 10) this._record("FLAT_SHOULDER_PLANE", 1 + (10 - tilt) / 10);
+    if (tilt < 10) {
+      this._record("FLAT_SHOULDER_PLANE", 1 + (10 - tilt) / 10);
+      // 理想肩线：绕肩中点把当前肩线旋转到约 30° 倾角
+      const half = dist(ls, rs) / 2;
+      const dir = Math.sign(this.targetDir) || 1;
+      const ang = (30 * Math.PI) / 180;
+      const ideal = {
+        a: { x: shC.x - half * Math.cos(ang) * dir, y: shC.y - half * Math.sin(ang) },
+        b: { x: shC.x + half * Math.cos(ang) * dir, y: shC.y + half * Math.sin(ang) },
+      };
+      this._annotate("FLAT_SHOULDER_PLANE", "红线=你的双肩，转得太平：应像绿虚线一样带角度（前肩转向下巴下方）", [
+        { type: "line", a: ideal.a, b: ideal.b, color: "green", dash: true },
+        { type: "line", a: ls, b: rs, color: "red" },
+      ]);
+    }
   }
 
   _checkDownswing(lms, f) {
@@ -385,7 +461,14 @@ export class SwingAnalyzer {
       this._checkPosture(lms, f);
       // 早伸：髋部沿水平方向顶出
       const hipDx = Math.abs(f.hip.x - b.hip.x);
-      if (hipDx > 0.26) this._record("EARLY_EXTENSION", hipDx / 0.26);
+      if (hipDx > 0.26) {
+        this._record("EARLY_EXTENSION", hipDx / 0.26);
+        this._annotate(
+          "EARLY_EXTENSION",
+          "胯部越过绿线向球的方向顶出：下杆时想象屁股一直贴着绿线",
+          this._shiftShapes(this._img(b.hip), mid(lms[LM.L_HIP], lms[LM.R_HIP]))
+        );
+      }
       // TPI Over-the-Top：同一高度上，下杆手部路径比上杆明显更靠球一侧
       if (this.bsPath.length > 4) {
         let nearest = null, best = Infinity;
@@ -397,7 +480,19 @@ export class SwingAnalyzer {
           const out = (f.hands.x - nearest.x) * b.ballDir;
           if (out > 0.15) {
             // 连续多帧偏外才判定，避免单帧抖动误报
-            if (++this.ottCount >= 4) this._record("OVER_THE_TOP", out / 0.15);
+            if (++this.ottCount >= 4) {
+              this._record("OVER_THE_TOP", out / 0.15);
+              const curHands = mid(lms[LM.L_WRIST], lms[LM.R_WRIST]);
+              this._annotate(
+                "OVER_THE_TOP",
+                "绿虚线=上杆时手走的路线；红=下杆的手跑到了它外侧，从外往里\"砍\"：让下杆的手贴着绿线内侧下来",
+                [
+                  { type: "path", pts: this.bsPath.map((p) => this._img(p)), color: "green", dash: true },
+                  { type: "arrow", a: this._img(nearest), b: curHands, color: "red" },
+                  { type: "circle", c: curHands, r: 0.1 * this._torso, color: "red" },
+                ]
+              );
+            }
           }
         }
       }
@@ -405,7 +500,14 @@ export class SwingAnalyzer {
       // 滑动：髋部向目标方向平移过多
       const slide = (f.hip.x - b.hip.x) * this.targetDir;
       const slideLimit = 0.75 * b.shoulderW;
-      if (slide > slideLimit) this._record("HIP_SLIDE", slide / slideLimit);
+      if (slide > slideLimit) {
+        this._record("HIP_SLIDE", slide / slideLimit);
+        this._annotate(
+          "HIP_SLIDE",
+          "胯部平移超过绿线太多、转动不足：下杆是\"轻移+猛转\"，感觉左胯向身后转",
+          this._shiftShapes(this._img(b.hip), mid(lms[LM.L_HIP], lms[LM.R_HIP]))
+        );
+      }
     }
   }
 
@@ -413,22 +515,50 @@ export class SwingAnalyzer {
     if (this.view !== "front") return;
     const s = this.leadSide;
     const elbow = angleAt(lms[s.shoulder], lms[s.elbow], lms[s.wrist]);
-    if (elbow < 140) this._record("CHICKEN_WING", 1 + (140 - elbow) / 25);
+    if (elbow < 140) {
+      this._record("CHICKEN_WING", 1 + (140 - elbow) / 25);
+      this._annotate("CHICKEN_WING", "红圈处手肘弯了（像鸡翅膀）：触球前后让这条手臂伸直指向目标", [
+        { type: "path", pts: [lms[s.shoulder], lms[s.elbow], lms[s.wrist]], color: "red" },
+        { type: "circle", c: lms[s.elbow], r: 0.14 * this._torso, color: "red" },
+      ]);
+    }
     // TPI Hanging Back：击球时骨盆几乎没有向目标方向移动（重心滞留后脚）
     const b = this.baseline;
     const shift = (f.hip.x - b.hip.x) * this.targetDir;
     const minShift = 0.02 * b.shoulderW;
-    if (shift < minShift)
+    if (shift < minShift) {
       this._record("HANGING_BACK", 1 + (minShift - shift) / (0.15 * b.shoulderW));
+      const hipC = mid(lms[LM.L_HIP], lms[LM.R_HIP]);
+      const dir = (this.targetDir || 1) * 0.55 * this._torso;
+      this._annotate("HANGING_BACK", "击球瞬间重心还压在后脚（红圈）：应顺着绿箭头转移到前脚", [
+        { type: "circle", c: hipC, r: 0.16 * this._torso, color: "red" },
+        { type: "arrow", a: hipC, b: { x: hipC.x + dir, y: hipC.y }, color: "green" },
+      ]);
+    }
   }
 
   /** 侧面通用：起身 / 头部起伏（上杆和下杆都检查） */
   _checkPosture(lms, f) {
     const b = this.baseline;
     const dSpine = Math.abs(f.spine - b.spine);
-    if (dSpine > 13) this._record("LOSS_OF_POSTURE", dSpine / 13);
+    if (dSpine > 13) {
+      this._record("LOSS_OF_POSTURE", dSpine / 13);
+      this._annotate("LOSS_OF_POSTURE", "绿虚线=开球时的前倾角度，红线=现在的上身：整个挥杆都要保持绿线的角度", [
+        { type: "line", a: this._img(b.hip), b: this._img(b.shoulder), color: "green", dash: true },
+        { type: "line", a: mid(lms[LM.L_HIP], lms[LM.R_HIP]), b: mid(lms[LM.L_SHOULDER], lms[LM.R_SHOULDER]), color: "red" },
+      ]);
+    }
     const headDy = Math.abs(f.head.y - b.head.y);
-    if (headDy > 0.22) this._record("HEAD_DROP", headDy / 0.22);
+    if (headDy > 0.22) {
+      this._record("HEAD_DROP", headDy / 0.22);
+      const baseHead = this._img(b.head), curHead = lms[LM.NOSE];
+      const r = 0.16 * this._torso;
+      this._annotate("HEAD_DROP", "绿圈=开球时头的高度，红圈=现在：头上下起伏太大，想象头顶着玻璃板转", [
+        { type: "circle", c: baseHead, r, color: "green", dash: true },
+        { type: "circle", c: curHead, r, color: "red" },
+        { type: "arrow", a: baseHead, b: curHead, color: "red" },
+      ]);
+    }
   }
 
   /* ---------- 收杆 → 生成报告 ---------- */
@@ -437,6 +567,7 @@ export class SwingAnalyzer {
   _abortSwing() {
     this.phase = PHASE.ADDRESS;
     this.faultsThisSwing.clear();
+    this.annotations.clear();
     this.bsPath = [];
     this.ottCount = 0;
     this.finishStillSince = 0;

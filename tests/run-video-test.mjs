@@ -127,6 +127,15 @@ try {
     result.faults = await page.$$eval(".summary-item .si-title", (els) =>
       els.map((e) => e.textContent.trim())
     );
+    // 导出报告中的标注截图，便于人工核对可视化效果
+    const outDir = path.join(ROOT, "tests", "output");
+    fs.mkdirSync(outDir, { recursive: true });
+    const shots = await page.$$eval(".summary-item .si-shot", (els) => els.map((e) => e.src));
+    shots.forEach((src, i) => {
+      const b64 = src.split(",")[1];
+      if (b64) fs.writeFileSync(path.join(outDir, `fault-${i}.jpg`), Buffer.from(b64, "base64"));
+    });
+    result.shotFiles = shots.length;
     const m = (result.note || "").match(/(\d+)\s*次/);
     result.swings = m ? Number(m[1]) : 1;
   }
