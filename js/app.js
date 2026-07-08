@@ -219,22 +219,29 @@ async function exitFileMode() {
   }
 }
 
-video.addEventListener("ended", () => {
-  if (state.source !== "file" || !state.running) return;
-  // 片尾若正处于挥杆中（正式击球被剪到结尾），强制收束成一次挥杆
-  replaySegment.end = video.duration || video.currentTime;
+/**
+ * 结束视频分析并出报告：自然播完与中途点「停止分析」共用同一逻辑。
+ * 若此刻正处于挥杆中（击球被剪到结尾/中途停止），先强制收束；
+ * 然后报告最后一次挥杆——试挥/热身在前，正式击球几乎总是最后一挥。
+ */
+function concludeFileAnalysis() {
+  replaySegment.end = video.currentTime || video.duration || 0;
   const tail = analyzer.finalize();
   if (tail) videoSwings.push(packSwing(tail));
 
-  // 只报告最后一次挥杆：试挥/热身动作在前，正式击球几乎总是最后一挥
   const chosen = videoSwings[videoSwings.length - 1];
+  stopAnalysis();
   if (chosen) {
     restoreSwing(chosen);
     showSummary(chosen.summary, videoSwings.length);
-  } else if (analyzer.phase !== PHASE.FINISH) {
-    showHint("视频中未识别到完整挥杆，请确认全身入镜且机位选择正确", 5000);
+  } else {
+    showHint("未识别到完整挥杆：请确认全身入镜、机位选择正确，且视频包含完整的挥杆动作", 5000);
   }
-  stopAnalysis();
+}
+
+video.addEventListener("ended", () => {
+  if (state.source !== "file" || !state.running) return;
+  concludeFileAnalysis();
   $("phasePill").textContent = "播放结束";
 });
 
@@ -647,7 +654,8 @@ $("startBtn").addEventListener("click", () => {
       );
     }
   } else {
-    stopAnalysis();
+    // 视频模式中途停止：与播完一样，汇总已检测的挥杆并弹出系统报告
+    concludeFileAnalysis();
   }
 });
 
