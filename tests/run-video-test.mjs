@@ -3,11 +3,11 @@
 // 监听阶段流转并提取最终报告，输出 JSON 结果。
 //
 // 用法：
-//   node tests/run-video-test.mjs                    # 冒烟测试（仅验证应用能启动）
-//   node tests/run-video-test.mjs tests/assets/a.webm [playbackRate]
+//   node tests/run-video-test.mjs                              # 冒烟测试
+//   node tests/run-video-test.mjs tests/assets/a.webm [front|side] [playbackRate]
 //
 // 注意：Playwright 的 Chromium 不含 H.264 解码器，iPhone 拍摄的 mov/mp4
-// 需先转成 WebM：ffmpeg -i in.mov -vf scale=720:-2 -c:v libvpx-vp9 -crf 36 -an out.webm
+// 需先转成 WebM：ffmpeg -i in.mov -vf scale=720:-2 -c:v libvpx -b:v 1.5M -an out.webm
 import { chromium } from "playwright";
 import http from "node:http";
 import fs from "node:fs";
@@ -16,7 +16,8 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const videoPath = process.argv[2] ? path.resolve(process.argv[2]) : null;
-const playbackRate = Number(process.argv[3] || 2);
+const view = process.argv[3] === "side" ? "side" : "front";
+const playbackRate = Number(process.argv[4] || 2);
 
 const MIME = {
   ".html": "text/html", ".js": "application/javascript", ".mjs": "application/javascript",
@@ -87,21 +88,41 @@ try {
       { timeout: 30000 }
     );
     const duration = await page.evaluate(() => document.getElementById("video").duration);
-    console.error(`[ok] 视频已装载，时长 ${duration.toFixed(1)}s，${playbackRate}x 速分析`);
+    console.error(`[ok] 视频已装载，时长 ${duration.toFixed(1)}s，机位=${view}，${playbackRate}x 速分析`);
 
+    if (view === "side") await page.click('#viewSeg button[data-view="side"]');
     await page.click("#startBtn");
     await page.evaluate((r) => {
       document.getElementById("video").playbackRate = r;
     }, playbackRate);
 
-    // 等报告弹出（播完或中途自然收束）
-    await page.waitForSelector("#summaryModal:not(.hidden)", {
-      timeout: (duration / playbackRate) * 1000 * 1.5 + 60000,
-    });
+    // 诊断轮询：观察推理帧率与阶段流转（DEBUG=1 时打印）
+    const poller = setInterval(async () => {
+      const s = await page.evaluate(() => ({
+        pill: document.getElementById("phasePill").textContent,
+        fps: document.getElementById("fpsLabel").textContent,
+        t: +document.getElementById("video").currentTime.toFixed(1),
+        ended: document.getElementById("video").ended,
+      })).catch(() => null);
+      if (s && process.env.DEBUG) console.error(`[poll] t=${s.t}s ${s.pill} ${s.fps} ended=${s.ended}`);
+    }, 2000);
 
-    result.phases = await page.evaluate(() => window.__phases.map((x) => x.p));
+    try {
+      // 等报告弹出（播完或中途自然收束）
+      await page.waitForSelector("#summaryModal:not(.hidden)", {
+        timeout: (duration / playbackRate) * 1000 * 1.5 + 60000,
+      });
+    } finally {
+      clearInterval(poller);
+      result.phases = await page
+        .evaluate(() => window.__phases.map((x) => x.p))
+        .catch(() => []);
+    }
+    await page.waitForTimeout(1000); // 等分数滚动动画结束再取值
     result.note = await page.textContent("#summaryNote").catch(() => null);
     result.score = (await page.textContent("#summaryScore")).trim();
+    result.roast = (await page.textContent("#summaryRoast").catch(() => "")).trim();
+    result.tempo = (await page.textContent("#summaryTempo").catch(() => "")).trim();
     result.tier = (await page.textContent("#summaryTier")).trim();
     result.faults = await page.$$eval(".summary-item .si-title", (els) =>
       els.map((e) => e.textContent.trim())

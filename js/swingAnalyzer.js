@@ -77,7 +77,9 @@ export class SwingAnalyzer {
     this.addressFrames = [];    // 静止采样缓冲
     this.useAnkleAnchor = null; // 脚踝是否可见（决定是否启用镜头运动补偿）
     this.lastHandsY = null;
-    this.handsVelY = 0;         // 归一化单位/帧
+    this.lastT = null;
+    this.handsVel = 0;          // 手部垂直速度：躯干单位/秒（时间基准，
+                                // 与推理帧率无关——低端设备 5fps 也能正确工作）
     this.topReachedAt = 0;
     this.finishStillSince = 0;
     this.targetDir = 0;         // +1 / -1：目标方向（由上杆方向反推，免疫镜像）
@@ -153,14 +155,20 @@ export class SwingAnalyzer {
         // 人离开画面，放弃本次跟踪
         this.reset();
       }
+      this.lastHandsY = null;
+      this.lastT = null;
       return this._out();
     }
 
     const f = this._normalize(lms);
     if (!f) return this._out();
 
-    if (this.lastHandsY !== null) this.handsVelY = f.hands.y - this.lastHandsY;
+    if (this.lastHandsY !== null && tMs > this.lastT) {
+      const dt = Math.min(0.5, (tMs - this.lastT) / 1000);
+      if (dt > 0.001) this.handsVel = (f.hands.y - this.lastHandsY) / dt;
+    }
     this.lastHandsY = f.hands.y;
+    this.lastT = tMs;
     // 记录本次动作的最大上抬幅度（收束时用于过滤准备中的小动作）
     if (this.baseline && this.phase !== PHASE.IDLE && this.phase !== PHASE.ADDRESS) {
       this.maxRise = Math.max(this.maxRise, this.baseline.hands.y - f.hands.y);
@@ -183,7 +191,7 @@ export class SwingAnalyzer {
       case PHASE.BACKSWING:
         this._checkBackswing(lms, f);
         // 手回升（y 增大）且已明显高于基准 → 到达顶点
-        if (f.hands.y < this.baseline.hands.y - 0.35 && this.handsVelY > 0.008) {
+        if (f.hands.y < this.baseline.hands.y - 0.35 && this.handsVel > 0.25) {
           this.phase = PHASE.TOP;
           this.topReachedAt = tMs;
           this._checkTop(lms, f);
@@ -194,7 +202,7 @@ export class SwingAnalyzer {
         break;
       case PHASE.TOP:
         this._checkTop(lms, f);
-        if (tMs - this.topReachedAt > 80 || this.handsVelY > 0.016) {
+        if (tMs - this.topReachedAt > 80 || this.handsVel > 0.5) {
           this.phase = PHASE.DOWNSWING;
         }
         break;
@@ -215,7 +223,7 @@ export class SwingAnalyzer {
         break;
       case PHASE.FOLLOW: {
         // 手高过肩且基本静止 → 收杆
-        const still = Math.abs(this.handsVelY) < 0.012;
+        const still = Math.abs(this.handsVel) < 0.35;
         if (f.hands.y < f.shoulder.y && still) {
           if (!this.finishStillSince) this.finishStillSince = tMs;
           if (tMs - this.finishStillSince > 400) this._finishSwing();
@@ -240,7 +248,7 @@ export class SwingAnalyzer {
 
   _detectAddress(f, tMs) {
     // 手在髋部以下且整体静止 → 认为进入准备姿势
-    if (f.hands.y > f.hip.y && Math.abs(this.handsVelY) < 0.016) {
+    if (f.hands.y > f.hip.y && Math.abs(this.handsVel) < 0.5) {
       this.phase = PHASE.ADDRESS;
       this.addressFrames = [];
       this.addressStart = tMs;
@@ -259,20 +267,24 @@ export class SwingAnalyzer {
       // 压杆、举杆检查、waggle 等准备小动作（幅度通常 <0.15）不触发
       if (
         f.hands.y < this.baseline.hands.y - 0.15 &&
-        this.handsVelY < -0.008
+        this.handsVel < -0.25
       ) {
         this._beginBackswing(f, tMs);
       }
       return;
     }
-    if (Math.abs(this.handsVelY) > 0.024) {
+    if (Math.abs(this.handsVel) > 0.7) {
       // 基准尚未锁定时移动 → 重新等待静止
       this.phase = PHASE.IDLE;
       return;
     }
     this.addressFrames.push(f);
-    // 静止约 600ms（≥12 帧）后锁定基准并做准备姿势检查
-    if (this.addressFrames.length >= 12 && !this.baseline) {
+    // 静止约 600ms 且累计足够采样后锁定基准（时间基准：低帧率设备同样适用）
+    if (
+      this.addressFrames.length >= 5 &&
+      tMs - this.addressStart >= 600 &&
+      !this.baseline
+    ) {
       const fs = this.addressFrames;
       const avgP = (k) => ({
         x: fs.reduce((s, x) => s + x[k].x, 0) / fs.length,
