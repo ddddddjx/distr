@@ -278,7 +278,7 @@ button.ghost { background: var(--fill); color: var(--text); font-size: 14px; pad
 .summary-good { font-size: 15px; color: var(--green); margin-bottom: 14px; }
 .modal-card .primary { width: 100%; margin-top: 8px; }
 .modal-card .ghost.wide { width: 100%; margin-top: 4px; }
-.tier-line { font-size: 13px; color: var(--green); font-weight: 600; margin: -8px 0 14px; }
+.tier-line { font-size: 13px; color: var(--green); font-weight: 600; margin: -8px 0 6px; }
 
 /* 分享卡预览 */
 .share-img {
@@ -340,10 +340,36 @@ button.ghost { background: var(--fill); color: var(--text); font-size: 14px; pad
 .fr-up { color: var(--red); }
 .stats-foot { font-size: 10.5px; color: var(--text-3); margin-top: 12px; }
 
-/* ---------- 模式选择页 ---------- */
-.chooser-brand { justify-content: center; font-size: 20px; margin-bottom: 18px; }
+/* ---------- 模式选择页（落地页） ---------- */
+.chooser-brand { justify-content: center; font-size: 24px; margin-bottom: 6px; }
+.chooser-slogan { font-size: 14px; color: var(--text-2); margin-bottom: 14px; }
+.chips { display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+.chip {
+  padding: 5px 12px; border-radius: 999px;
+  background: rgba(48, 209, 88, 0.13);
+  color: var(--green);
+  font-size: 12px; font-weight: 600;
+}
 .modal-card .big { width: 100%; padding: 15px; font-size: 16px; margin-top: 4px; }
 .choose-note { font-size: 12px; color: var(--text-3); line-height: 1.5; margin: 8px 0 16px; }
+.link-btn {
+  border: 0; background: transparent;
+  color: var(--text-3); font-size: 12px;
+  font-family: inherit; text-decoration: underline;
+  cursor: pointer; margin-top: 4px;
+}
+
+/* ---------- 关于与隐私 ---------- */
+.about-card { text-align: left; }
+.about-card h2 { text-align: center; }
+.about-block { margin-bottom: 14px; }
+.about-title { font-size: 13px; font-weight: 700; color: var(--green); margin-bottom: 4px; }
+.about-block p { font-size: 13px; color: var(--text-2); line-height: 1.7; }
+.about-block b { color: var(--text); }
+.about-ver { text-align: center; font-size: 11px; color: var(--text-3); margin-top: 6px; }
+
+/* 报告锐评 */
+.roast-line { font-size: 14px; color: var(--text); margin: -4px 0 14px; }
 
 /* ---------- 语音设置 ---------- */
 .voice-row {

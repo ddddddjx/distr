@@ -4,7 +4,9 @@ import { SwingAnalyzer, PHASE, PHASE_LABEL } from "./swingAnalyzer.js";
 import { RULES, SEVERITY } from "./rules.js";
 import { VoiceCoach } from "./voice.js";
 import { saveSwing, computeStats } from "./store.js";
-import { buildSwingCard, buildWeeklyCard, tierOf, percentileOf } from "./shareCard.js";
+import { buildSwingCard, buildWeeklyCard, tierOf, percentileOf, roastOf } from "./shareCard.js";
+
+const APP_VERSION = "0.9.0";
 
 const $ = (id) => document.getElementById(id);
 const video = $("video");
@@ -54,7 +56,8 @@ function withTimeout(promise, ms, message) {
 
 async function boot() {
   try {
-    $("loadingText").textContent = "正在加载 AI 姿态模型…";
+    $("loadingText").textContent =
+      "正在加载 AI 模型…首次使用需下载约 25MB，之后打开秒启动";
     await detector.init();
   } catch (err) {
     // 模型加载失败是致命错误，保留遮罩提示
@@ -412,6 +415,8 @@ function showSummary(summary, swingCount = 1) {
   lastSummary = summary;
   $("summaryTier").textContent =
     `${tierOf(summary.score)} · 预估击败 ${percentileOf(summary.score)}% 的球友`;
+  $("summaryRoast").textContent = `「 ${roastOf(summary)} 」`;
+  navigator.vibrate?.(30); // 报告弹出的轻触觉反馈（支持的设备）
   const note = $("summaryNote");
   if (swingCount > 1) {
     note.textContent = `视频中检测到 ${swingCount} 次挥杆动作 · 已分析最后一次（通常为正式击球）`;
@@ -812,6 +817,15 @@ function renderVoiceList() {
         .join("")
     : `<div class="voice-empty">当前浏览器没有可用的中文语音。iPhone 可在 设置 → 辅助功能 → 朗读内容 → 声音 中下载；安卓需安装系统 TTS 引擎。</div>`;
 }
+
+$("aboutLink").addEventListener("click", () => {
+  $("aboutVer").textContent = `SwingCoach v${APP_VERSION}`;
+  $("aboutModal").classList.remove("hidden");
+});
+
+$("closeAbout").addEventListener("click", () => {
+  $("aboutModal").classList.add("hidden");
+});
 
 $("chooseLive").addEventListener("click", () => {
   $("chooser").classList.add("hidden");

@@ -22,6 +22,41 @@ export function percentileOf(score) {
   return Math.max(1, Math.min(99, Math.round((score - 52) * 2.1)));
 }
 
+// AI 锐评：自嘲/夸赞式一句话，社交平台传播的核心文案。
+// 优先用最严重问题的专属锐评，没有问题时按分数段夸。
+const FAULT_ROASTS = {
+  LOSS_OF_POSTURE: "一挥杆就起身，比闹钟响了起床还积极",
+  EARLY_EXTENSION: "胯比手先到球位，有点抢戏了",
+  HIP_SWAY: "上杆摇得很投入，广场舞冠军预定",
+  OVER_THE_TOP: "这一杆从外面砍下来，球表示很委屈",
+  REVERSE_SPINE: "上杆顶点身体写了个反 C，腰替你喊疼",
+  CHICKEN_WING: "收杆左臂一弯，鸡翅膀这就熟了",
+  HANGING_BACK: "重心太恋家，死活不肯搬去前脚",
+  HIP_SLIDE: "髋部一路平移，忘了自己其实会转",
+  HEAD_SWAY: "头跟着球杆到处旅游，该定定心了",
+  HEAD_DROP: "打个球头点得像在赶稿，稳住",
+  FLAT_SHOULDER_PLANE: "转肩平得能端住一盘水饺",
+  C_POSTURE: "这站姿像加班第八个小时的你",
+  SPINE_TOO_UPRIGHT: "站得比保安还标准，放松一点",
+  SPINE_TOO_BENT: "鞠躬尽瘁型站位，上身抬一点",
+};
+
+const SCORE_PRAISES = [
+  [95, "这挥杆可以直接进集锦，建议装裱"],
+  [90, "教练看了都想主动递名片"],
+  [85, "稳得像开了防抖，离单差点不远了"],
+  [80, "有点东西，球友群里可以横着走了"],
+  [70, "底子不错，就差最后几脚打磨"],
+  [60, "标准潜力股，练一个月回来吓自己一跳"],
+  [0, "先别急着换球杆，问题真不在装备"],
+];
+
+export function roastOf(summary) {
+  const top = summary.faults?.[0];
+  if (top && FAULT_ROASTS[top.key]) return FAULT_ROASTS[top.key];
+  return SCORE_PRAISES.find(([min]) => summary.score >= min)[1];
+}
+
 const loadImage = (src) =>
   new Promise((res) => {
     const img = new Image();
@@ -103,7 +138,7 @@ async function drawFooter(ctx) {
   ctx.textAlign = "left";
   ctx.fillStyle = "#fff";
   ctx.font = `600 36px ${FONT}`;
-  ctx.fillText("扫码测测你的挥杆能打几分", 100, fy + 82);
+  ctx.fillText("扫码来一杆，敢跟我比比吗？", 100, fy + 82);
   ctx.fillStyle = "rgba(235,245,237,0.5)";
   ctx.font = `400 26px ${FONT}`;
   ctx.fillText("免费 AI 挥杆分析 · 视频不上传 · 无需安装", 100, fy + 132);
@@ -114,35 +149,39 @@ export async function buildSwingCard(summary, keyframes) {
   const [c, ctx] = newCanvas();
   drawHeader(ctx, "AI 挥杆教练");
 
-  // 大分数 + 段位
+  // 大分数 + 段位（实心徽章）
   ctx.textAlign = "center";
   ctx.fillStyle = "#fff";
-  ctx.font = `800 300px ${FONT}`;
-  ctx.fillText(String(summary.score), W / 2, 480);
-  ctx.font = `500 44px ${FONT}`;
+  ctx.font = `800 280px ${FONT}`;
+  ctx.fillText(String(summary.score), W / 2, 460);
+  ctx.font = `500 42px ${FONT}`;
   ctx.fillStyle = "rgba(235,245,237,0.6)";
-  ctx.fillText("AI 挥杆评分", W / 2, 550);
+  ctx.fillText("AI 挥杆评分", W / 2, 528);
 
   const tier = tierOf(summary.score);
   ctx.font = `700 46px ${FONT}`;
-  const tw = ctx.measureText(tier).width + 88;
-  ctx.strokeStyle = GREEN;
-  ctx.lineWidth = 3;
-  roundRect(ctx, (W - tw) / 2, 590, tw, 84, 42);
-  ctx.stroke();
+  const tw = ctx.measureText(tier).width + 96;
   ctx.fillStyle = GREEN;
-  ctx.fillText(tier, W / 2, 648);
+  roundRect(ctx, (W - tw) / 2, 566, tw, 86, 43);
+  ctx.fill();
+  ctx.fillStyle = "#04220e";
+  ctx.fillText(tier, W / 2, 626);
 
   ctx.fillStyle = "#fff";
-  ctx.font = `500 40px ${FONT}`;
-  ctx.fillText(`预估击败 ${percentileOf(summary.score)}% 的球友`, W / 2, 740);
+  ctx.font = `500 38px ${FONT}`;
+  ctx.fillText(`预估击败 ${percentileOf(summary.score)}% 的球友`, W / 2, 712);
+
+  // AI 锐评：社交传播的记忆点
+  ctx.fillStyle = "rgba(235,245,237,0.85)";
+  ctx.font = `600 40px ${FONT}`;
+  ctx.fillText(`「 ${roastOf(summary)} 」`, W / 2, 786);
 
   // 关键位置四宫格
   const order = [["address", "准备"], ["top", "顶点"], ["impact", "击球"], ["finish", "收杆"]];
   const shots = order.filter(([k]) => keyframes.has(k));
   if (shots.length) {
     const gap = 18, cw = (W - 120 - gap * (shots.length - 1)) / shots.length;
-    const ch = cw * 1.25, y0 = 800;
+    const ch = Math.min(cw * 1.25, 280), y0 = 836;
     for (let i = 0; i < shots.length; i++) {
       const img = await loadImage(keyframes.get(shots[i][0]));
       const x = 60 + i * (cw + gap);
@@ -150,28 +189,8 @@ export async function buildSwingCard(summary, keyframes) {
       ctx.fillStyle = "rgba(235,245,237,0.55)";
       ctx.font = `400 26px ${FONT}`;
       ctx.textAlign = "center";
-      ctx.fillText(shots[i][1], x + cw / 2, y0 + ch + 40);
+      ctx.fillText(shots[i][1], x + cw / 2, y0 + ch + 38);
     }
-  }
-
-  // 节奏 + 主要问题
-  let y = 1120;
-  ctx.textAlign = "center";
-  if (summary.tempo) {
-    ctx.fillStyle = "rgba(235,245,237,0.75)";
-    ctx.font = `400 32px ${FONT}`;
-    ctx.fillText(`挥杆节奏 ${summary.tempo.ratio.toFixed(1)} : 1（职业参考 3:1）`, W / 2, y);
-    y += 54;
-  }
-  if (summary.faults.length) {
-    ctx.fillStyle = "rgba(235,245,237,0.55)";
-    ctx.font = `400 30px ${FONT}`;
-    const names = summary.faults.slice(0, 2).map((f) => f.rule.title).join(" · ");
-    ctx.fillText(`AI 建议改进：${names}`, W / 2, y);
-  } else {
-    ctx.fillStyle = GREEN;
-    ctx.font = `500 32px ${FONT}`;
-    ctx.fillText("本次挥杆没有检测到明显问题", W / 2, y);
   }
 
   await drawFooter(ctx);

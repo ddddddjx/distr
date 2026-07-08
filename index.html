@@ -63,6 +63,7 @@
         <div id="summaryNote" class="snote hidden"></div>
         <div id="summaryScore" class="score"></div>
         <div id="summaryTier" class="tier-line"></div>
+        <div id="summaryRoast" class="roast-line"></div>
         <div id="summaryTempo" class="tempo hidden"></div>
         <video id="replayVideo" class="replay hidden" playsinline muted loop></video>
         <div id="keyframesWrap" class="keyframes hidden"></div>
@@ -94,15 +95,42 @@
       </div>
     </div>
 
-    <!-- 模式选择页：摄像头仅在用户明确选择实时模式后才开启 -->
+    <!-- 模式选择页（品牌落地页）：摄像头仅在用户明确选择实时模式后才开启 -->
     <div id="chooser" class="modal hidden">
       <div class="modal-card">
         <div class="brand chooser-brand"><span class="brand-dot"></span>SwingCoach</div>
-        <h2>选择使用方式</h2>
+        <p class="chooser-slogan">你的口袋高尔夫 AI 教练</p>
+        <div class="chips">
+          <span class="chip">完全免费</span>
+          <span class="chip">视频不上传</span>
+          <span class="chip">TPI 教学体系</span>
+        </div>
         <button id="chooseLive" class="primary big">实时拍摄分析</button>
         <p class="choose-note">开启摄像头对着球员拍摄，挥杆时实时语音指导</p>
         <button id="chooseUpload" class="ghost big">上传视频分析</button>
         <p class="choose-note">从相册选择已拍好的挥杆视频，无需开启摄像头</p>
+        <button id="aboutLink" class="link-btn">关于与隐私</button>
+      </div>
+    </div>
+
+    <!-- 关于与隐私 -->
+    <div id="aboutModal" class="modal hidden">
+      <div class="modal-card about-card">
+        <h2>关于 SwingCoach</h2>
+        <div class="about-block">
+          <div class="about-title">隐私承诺</div>
+          <p>所有 AI 分析在你的手机本地完成：拍摄画面、上传的视频、挥杆记录都<b>不会离开这台设备</b>，我们没有服务器，也不收集任何个人数据。</p>
+        </div>
+        <div class="about-block">
+          <div class="about-title">使用须知</div>
+          <p>分析基于 2D 人体姿态估计的启发式规则，定位是<b>练习辅助工具</b>，不能替代专业教练的现场指导。检测规则参考 TPI（Titleist Performance Institute）与 PGA 的公开教学体系，本应用与上述机构<b>无任何官方关联</b>。</p>
+        </div>
+        <div class="about-block">
+          <div class="about-title">拍摄建议</div>
+          <p>镜头距离 3-4 米、全身入镜；正面机位对准胸口，侧面机位沿击球目标线。数据保存在当前浏览器中，清除缓存会清空练习记录。</p>
+        </div>
+        <p class="about-ver" id="aboutVer"></p>
+        <button id="closeAbout" class="primary">知道了</button>
       </div>
     </div>
 
