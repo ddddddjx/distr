@@ -30,6 +30,15 @@
       <!-- 实时反馈浮层 -->
       <div id="liveFaults"></div>
 
+      <!-- 站位引导框（实时模式等待入镜时显示） -->
+      <div id="guideFrame" class="guide hidden">
+        <div class="guide-box"></div>
+        <p>让球员全身进入框内</p>
+      </div>
+
+      <!-- 今日战绩徽标 -->
+      <div id="sessionBadge" class="session-badge hidden"></div>
+
       <!-- 站位辅助提示 -->
       <div id="hint" class="hint hidden"></div>
     </main>
@@ -113,6 +122,20 @@
       </div>
     </div>
 
+    <!-- 首次使用三步引导 -->
+    <div id="onboardModal" class="modal hidden">
+      <div class="modal-card">
+        <h2>三步开始 AI 分析</h2>
+        <div class="ob-step"><span class="ob-num">1</span><p>手机架在 3-4 米外，<b>全身入镜</b>：正面机位对准胸口，侧面机位沿击球目标线</p></div>
+        <div class="ob-step"><span class="ob-num">2</span><p>摆好准备姿势<b>静止 1 秒</b>，听到"姿势就位"提示即可开始挥杆</p></div>
+        <div class="ob-step"><span class="ob-num">3</span><p>收杆后<b>保持姿势半秒</b>，评分报告自动弹出，还能生成分享卡</p></div>
+        <button id="closeOnboard" class="primary">开始体验</button>
+      </div>
+    </div>
+
+    <!-- 高分彩带 -->
+    <canvas id="confetti" class="confetti hidden"></canvas>
+
     <!-- 关于与隐私 -->
     <div id="aboutModal" class="modal hidden">
       <div class="modal-card about-card">
@@ -128,6 +151,14 @@
         <div class="about-block">
           <div class="about-title">拍摄建议</div>
           <p>镜头距离 3-4 米、全身入镜；正面机位对准胸口，侧面机位沿击球目标线。数据保存在当前浏览器中，清除缓存会清空练习记录。</p>
+        </div>
+        <div class="about-block">
+          <div class="about-title">像 App 一样使用</div>
+          <p>在浏览器分享菜单中选择「添加到主屏幕」，即可全屏启动、离线使用。</p>
+        </div>
+        <div class="row about-actions">
+          <button id="feedbackBtn" class="ghost">意见反馈</button>
+          <button id="clearDataBtn" class="ghost">清除本地数据</button>
         </div>
         <p class="about-ver" id="aboutVer"></p>
         <button id="closeAbout" class="primary">知道了</button>

@@ -3,7 +3,7 @@ import { PoseDetector } from "./poseDetector.js";
 import { SwingAnalyzer, PHASE, PHASE_LABEL } from "./swingAnalyzer.js";
 import { RULES, SEVERITY } from "./rules.js";
 import { VoiceCoach } from "./voice.js";
-import { saveSwing, computeStats } from "./store.js";
+import { saveSwing, computeStats, getSwings, clearSwings } from "./store.js";
 import { buildSwingCard, buildWeeklyCard, tierOf, percentileOf, roastOf } from "./shareCard.js";
 
 const APP_VERSION = "0.9.0";
@@ -68,6 +68,7 @@ async function boot() {
   // 不自动开启摄像头：让用户先选择实时拍摄还是上传视频
   $("loading").classList.add("hidden");
   $("chooser").classList.remove("hidden");
+  updateSessionBadge();
 }
 
 async function startLiveMode() {
@@ -76,7 +77,15 @@ async function startLiveMode() {
   try {
     await openCamera();
     $("loading").classList.add("hidden");
-    if (state.source === "camera") showHint(hintForView(), 4000);
+    if (state.source === "camera") {
+      // 首次进入实时模式：三步引导（直接决定新用户激活率）
+      if (!localStorage.getItem("onboarded")) {
+        localStorage.setItem("onboarded", "1");
+        $("onboardModal").classList.remove("hidden");
+      } else {
+        showHint(hintForView(), 4000);
+      }
+    }
   } catch (err) {
     // 相机失败不阻塞应用：上传视频分析仍然可用
     $("loading").classList.add("hidden");
@@ -189,7 +198,12 @@ async function enterFileMode(file) {
   $("flipBtn").textContent = "返回相机";
   await new Promise((res) => (video.onloadedmetadata = res));
   resizeOverlay();
-  showHint("请确认上方机位选择与视频拍摄角度一致，点「开始分析」", 5000);
+  showHint(
+    video.duration > 120
+      ? "视频较长，建议剪辑到挥杆前后 10-20 秒再分析，更快更准。点「开始分析」继续"
+      : "请确认上方机位选择与视频拍摄角度一致，点「开始分析」",
+    5000
+  );
   $("phasePill").textContent = "视频已就绪";
 }
 
@@ -386,6 +400,11 @@ function renderPhase(phase) {
   const pill = $("phasePill");
   pill.textContent = PHASE_LABEL[phase] || "—";
   pill.classList.toggle("active", phase !== PHASE.IDLE);
+  // 实时模式等待入镜时显示站位引导框
+  $("guideFrame").classList.toggle(
+    "hidden",
+    !(state.running && state.source === "camera" && phase === PHASE.IDLE)
+  );
 }
 
 // 同一条提示做 1.2s 防抖，避免逐帧闪烁
@@ -426,9 +445,11 @@ function showSummary(summary, swingCount = 1) {
   }
   const { score, faults, tempo } = summary;
   const scoreEl = $("summaryScore");
-  scoreEl.textContent = score + " 分";
   scoreEl.className =
     "score " + (score >= 85 ? "s-good" : score >= 65 ? "s-mid" : "s-bad");
+  animateScore(scoreEl, score);       // 分数滚动揭晓
+  if (score >= 85) celebrate();       // 高分彩带：值得录屏的瞬间
+  updateSessionBadge();
 
   renderTempo(tempo);
   showReplay();
@@ -634,6 +655,71 @@ $("closeSummary").addEventListener("click", () => {
     showHint("摆好准备姿势，开始下一次挥杆", 3000);
 });
 
+/* ---------- 高光时刻：分数动画 / 彩带 / 今日战绩 ---------- */
+
+function animateScore(el, target) {
+  const t0 = performance.now(), dur = 700;
+  (function tick() {
+    const p = Math.min(1, (performance.now() - t0) / dur);
+    el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3))) + " 分";
+    if (p < 1) requestAnimationFrame(tick);
+  })();
+}
+
+function celebrate() {
+  const c = $("confetti");
+  c.width = innerWidth;
+  c.height = innerHeight;
+  c.classList.remove("hidden");
+  const ctx2 = c.getContext("2d");
+  const colors = ["#30d158", "#ffd60a", "#ffffff", "#64d2ff"];
+  const parts = Array.from({ length: 90 }, () => ({
+    x: Math.random() * c.width,
+    y: -20 - Math.random() * c.height * 0.3,
+    r: 5 + Math.random() * 6,
+    vy: 2.5 + Math.random() * 3.5,
+    vx: (Math.random() - 0.5) * 2,
+    rot: Math.random() * Math.PI,
+    vr: (Math.random() - 0.5) * 0.3,
+    col: colors[(Math.random() * colors.length) | 0],
+  }));
+  const t0 = performance.now();
+  (function tick() {
+    ctx2.clearRect(0, 0, c.width, c.height);
+    for (const p of parts) {
+      p.x += p.vx; p.y += p.vy; p.rot += p.vr;
+      ctx2.save();
+      ctx2.translate(p.x, p.y);
+      ctx2.rotate(p.rot);
+      ctx2.fillStyle = p.col;
+      ctx2.fillRect(-p.r / 2, -p.r / 2, p.r, p.r * 0.6);
+      ctx2.restore();
+    }
+    if (performance.now() - t0 < 1800) requestAnimationFrame(tick);
+    else {
+      ctx2.clearRect(0, 0, c.width, c.height);
+      c.classList.add("hidden");
+    }
+  })();
+}
+
+function updateSessionBadge() {
+  const todayKey = new Date().toDateString();
+  const today = getSwings().filter(
+    (s) => new Date(s.t).toDateString() === todayKey
+  );
+  const el = $("sessionBadge");
+  if (!today.length) { el.classList.add("hidden"); return; }
+  const best = Math.max(...today.map((s) => s.score));
+  el.textContent = `今日第 ${today.length} 杆 · 最佳 ${best} 分`;
+  el.classList.remove("hidden");
+}
+
+$("closeOnboard").addEventListener("click", () => {
+  $("onboardModal").classList.add("hidden");
+  showHint(hintForView(), 4000);
+});
+
 /* ---------- 分享卡 ---------- */
 
 function openShare(dataUrl) {
@@ -827,6 +913,31 @@ $("closeAbout").addEventListener("click", () => {
   $("aboutModal").classList.add("hidden");
 });
 
+$("feedbackBtn").addEventListener("click", () => {
+  location.href =
+    "mailto:ding1430829048@gmail.com?subject=" +
+    encodeURIComponent(`SwingCoach 反馈 (v${APP_VERSION})`);
+});
+
+// 清除本地数据：双击确认，避免误触
+let clearArmed = false;
+$("clearDataBtn").addEventListener("click", () => {
+  if (!clearArmed) {
+    clearArmed = true;
+    $("clearDataBtn").textContent = "再点一次确认清除";
+    setTimeout(() => {
+      clearArmed = false;
+      $("clearDataBtn").textContent = "清除本地数据";
+    }, 3000);
+    return;
+  }
+  clearSwings();
+  clearArmed = false;
+  $("clearDataBtn").textContent = "清除本地数据";
+  updateSessionBadge();
+  showHint("本地练习数据已清除", 2500);
+});
+
 $("chooseLive").addEventListener("click", () => {
   $("chooser").classList.add("hidden");
   startLiveMode();
@@ -841,8 +952,14 @@ $("uploadBtn").addEventListener("click", () => $("videoInput").click());
 
 $("videoInput").addEventListener("change", (e) => {
   const file = e.target.files && e.target.files[0];
-  if (file) enterFileMode(file);
   e.target.value = ""; // 允许重复选择同一个文件
+  if (!file) return;
+  if (file.type && !file.type.startsWith("video/")) {
+    showHint("请选择视频文件（相册里拍摄的挥杆视频）", 3000);
+    if (!state.stream && !state.fileUrl) $("chooser").classList.remove("hidden");
+    return;
+  }
+  enterFileMode(file);
 });
 
 // 在选择页点了上传又取消选择 → 回到选择页（此时没有任何画面来源）
