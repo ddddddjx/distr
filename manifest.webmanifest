@@ -1,0 +1,15 @@
+{
+  "name": "SwingCoach 高尔夫挥杆 AI 教练",
+  "short_name": "SwingCoach",
+  "description": "免费 AI 挥杆分析：实时拍摄或上传视频，自动指出问题并给出改进练习。视频不上传，本地分析。",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d1b12",
+  "theme_color": "#0d1b12",
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

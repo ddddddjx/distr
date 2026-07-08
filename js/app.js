@@ -4,6 +4,7 @@ import { SwingAnalyzer, PHASE, PHASE_LABEL } from "./swingAnalyzer.js";
 import { RULES, SEVERITY } from "./rules.js";
 import { VoiceCoach } from "./voice.js";
 import { saveSwing, computeStats } from "./store.js";
+import { buildSwingCard, buildWeeklyCard, tierOf, percentileOf } from "./shareCard.js";
 
 const $ = (id) => document.getElementById(id);
 const video = $("video");
@@ -404,8 +405,13 @@ function renderLiveFaults(keys, phase, lms) {
   box.innerHTML = chips.join("");
 }
 
+let lastSummary = null; // 分享卡数据源
+
 function showSummary(summary, swingCount = 1) {
   saveSwing(summary, state.source); // 存入练习历史（仅元数据，不含视频）
+  lastSummary = summary;
+  $("summaryTier").textContent =
+    `${tierOf(summary.score)} · 预估击败 ${percentileOf(summary.score)}% 的球友`;
   const note = $("summaryNote");
   if (swingCount > 1) {
     note.textContent = `视频中检测到 ${swingCount} 次挥杆动作 · 已分析最后一次（通常为正式击球）`;
@@ -623,6 +629,52 @@ $("closeSummary").addEventListener("click", () => {
     showHint("摆好准备姿势，开始下一次挥杆", 3000);
 });
 
+/* ---------- 分享卡 ---------- */
+
+function openShare(dataUrl) {
+  $("shareImg").src = dataUrl;
+  $("shareModal").classList.remove("hidden");
+}
+
+$("shareSummaryBtn").addEventListener("click", async () => {
+  if (!lastSummary) return;
+  $("shareSummaryBtn").textContent = "生成中…";
+  try {
+    openShare(await buildSwingCard(lastSummary, keyframes));
+  } finally {
+    $("shareSummaryBtn").textContent = "生成成绩分享卡";
+  }
+});
+
+$("shareWeeklyBtn").addEventListener("click", async () => {
+  const st = computeStats();
+  if (!st) { showHint("还没有练习数据，先完成一次挥杆分析", 2500); return; }
+  $("shareWeeklyBtn").textContent = "生成中…";
+  try {
+    openShare(await buildWeeklyCard(st));
+  } finally {
+    $("shareWeeklyBtn").textContent = "生成周报分享卡";
+  }
+});
+
+$("closeShare").addEventListener("click", () => {
+  $("shareModal").classList.add("hidden");
+});
+
+$("shareSend").addEventListener("click", async () => {
+  try {
+    const blob = await (await fetch($("shareImg").src)).blob();
+    const file = new File([blob], "swingcoach.jpg", { type: "image/jpeg" });
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: "SwingCoach 挥杆成绩" });
+    } else {
+      showHint("当前浏览器不支持系统分享，请长按图片保存", 3000);
+    }
+  } catch {
+    /* 用户取消分享 */
+  }
+});
+
 /* ---------- 练习统计面板 ---------- */
 
 $("statsBtn").addEventListener("click", () => {
@@ -821,5 +873,10 @@ bindSeg("handSeg", "hand", (h) => {
   if (state.running) stopAnalysis();
   analyzer = new SwingAnalyzer(state.view, state.handedness);
 });
+
+// PWA：离线缓存 + 可添加到主屏幕（顺带缓解 github.io 二次访问的不稳定）
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
 
 boot();

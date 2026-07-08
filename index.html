@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0d1b12" />
   <title>SwingCoach · 高尔夫挥杆 AI 分析</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="assets/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
@@ -58,11 +62,25 @@
         <h2>本次挥杆分析报告</h2>
         <div id="summaryNote" class="snote hidden"></div>
         <div id="summaryScore" class="score"></div>
+        <div id="summaryTier" class="tier-line"></div>
         <div id="summaryTempo" class="tempo hidden"></div>
         <video id="replayVideo" class="replay hidden" playsinline muted loop></video>
         <div id="keyframesWrap" class="keyframes hidden"></div>
         <div id="summaryBody"></div>
+        <button id="shareSummaryBtn" class="ghost wide">生成成绩分享卡</button>
         <button id="closeSummary" class="primary">继续练习</button>
+      </div>
+    </div>
+
+    <!-- 分享卡预览 -->
+    <div id="shareModal" class="modal hidden">
+      <div class="modal-card">
+        <img id="shareImg" class="share-img" alt="分享卡" />
+        <p class="share-tip">长按图片保存，分享到小红书 / 朋友圈</p>
+        <div class="row">
+          <button id="shareSend" class="ghost">系统分享</button>
+          <button id="closeShare" class="primary">完成</button>
+        </div>
       </div>
     </div>
 
@@ -71,6 +89,7 @@
       <div class="modal-card">
         <h2>练习统计</h2>
         <div id="statsBody"></div>
+        <button id="shareWeeklyBtn" class="ghost wide">生成周报分享卡</button>
         <button id="closeStats" class="primary">关闭</button>
       </div>
     </div>
