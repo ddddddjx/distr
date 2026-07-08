@@ -323,7 +323,8 @@ function loop() {
     for (const key of liveFaults) {
       const rule = RULES[key];
       if (rule?.voice) coach.say(rule.voice, key, 7000);
-      if (lms && !snapshots.has(key)) {
+      // 截图取偏差最严重的瞬间（首次触发常是擦线的临界帧，最不准）
+      if (lms && (!snapshots.has(key) || analyzer.updatedFaults.has(key))) {
         // 带可视化标注的问题截图：红=当前动作，绿虚线=正确参考
         const shot = detector.snapshot(
           video, lms, mirrored, 480, analyzer.annotations.get(key)

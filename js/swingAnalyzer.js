@@ -80,6 +80,9 @@ export class SwingAnalyzer {
     this.lastT = null;
     this.handsVel = 0;          // 手部垂直速度：躯干单位/秒（时间基准，
                                 // 与推理帧率无关——低端设备 5fps 也能正确工作）
+    this.sHands = null;         // 平滑后的手部位置（80ms EMA，抹平关键点抖动）
+    this.peakHandsY = Infinity; // 本次上杆中手到过的最高点（y 最小值）
+    this.updatedFaults = new Set(); // 本帧内偏差创新高的问题（截图取最严重瞬间用）
     this.topReachedAt = 0;
     this.finishStillSince = 0;
     this.targetDir = 0;         // +1 / -1：目标方向（由上杆方向反推，免疫镜像）
@@ -155,6 +158,7 @@ export class SwingAnalyzer {
   /** 每帧调用。返回 { phase, liveFaults, summary }，summary 仅在收杆后出现一次 */
   update(lms, tMs) {
     this.liveFaults = [];
+    this.updatedFaults = new Set();
     this.summary = null;
     if (!lms) {
       if (this.phase !== PHASE.IDLE && this.phase !== PHASE.ADDRESS) {
@@ -163,11 +167,29 @@ export class SwingAnalyzer {
       }
       this.lastHandsY = null;
       this.lastT = null;
+      this.sHands = null;
       return this._out();
     }
 
+    // 可见度门控：手腕跟踪不可靠的帧（快速挥动的运动模糊）直接跳过，
+    // 避免坐标漂移污染相位判定与标注
+    const wristVis =
+      ((lms[LM.L_WRIST].visibility ?? 1) + (lms[LM.R_WRIST].visibility ?? 1)) / 2;
+    if (wristVis < 0.35) return this._out();
+
     const f = this._normalize(lms);
     if (!f) return this._out();
+
+    // 手部位置 80ms EMA 平滑：单帧关键点跳变不再影响相位与速度
+    if (this.sHands && this.lastT !== null && tMs > this.lastT) {
+      const dtS = Math.min(0.5, (tMs - this.lastT) / 1000);
+      const a = 1 - Math.exp(-dtS / 0.08);
+      f.hands = {
+        x: this.sHands.x + (f.hands.x - this.sHands.x) * a,
+        y: this.sHands.y + (f.hands.y - this.sHands.y) * a,
+      };
+    }
+    this.sHands = { x: f.hands.x, y: f.hands.y };
 
     if (this.lastHandsY !== null && tMs > this.lastT) {
       const dt = Math.min(0.5, (tMs - this.lastT) / 1000);
@@ -196,8 +218,14 @@ export class SwingAnalyzer {
         break;
       case PHASE.BACKSWING:
         this._checkBackswing(lms, f);
-        // 手回升（y 增大）且已明显高于基准 → 到达顶点
-        if (f.hands.y < this.baseline.hands.y - 0.35 && this.handsVel > 0.25) {
+        this.peakHandsY = Math.min(this.peakHandsY, f.hands.y);
+        // 顶点判定：手已抬得足够高，且从本次最高点【实际回落】≥0.08 躯干。
+        // 不再依赖瞬时速度符号——单帧抖动无法伪造持续回落，
+        // 上杆中途不会再被误判成下杆
+        if (
+          this.baseline.hands.y - this.peakHandsY >= 0.35 &&
+          f.hands.y - this.peakHandsY > 0.08
+        ) {
           this.phase = PHASE.TOP;
           this.topReachedAt = tMs;
           this._checkTop(lms, f);
@@ -208,7 +236,7 @@ export class SwingAnalyzer {
         break;
       case PHASE.TOP:
         this._checkTop(lms, f);
-        if (tMs - this.topReachedAt > 80 || this.handsVel > 0.5) {
+        if (tMs - this.topReachedAt > 80 || f.hands.y - this.peakHandsY > 0.18) {
           this.phase = PHASE.DOWNSWING;
         }
         break;
@@ -322,6 +350,7 @@ export class SwingAnalyzer {
   _beginBackswing(f, tMs) {
     this.phase = PHASE.BACKSWING;
     this.tBackswing = tMs;
+    this.peakHandsY = f.hands.y;
     // 上杆时手远离目标 → 反推目标方向（与镜像、左右手均无关）
     this.targetDir = f.hands.x > this.baseline.hands.x ? -1 : 1;
     // 侧面视角记录上杆手部路径，下杆时对比判定 Over-the-Top
@@ -340,6 +369,8 @@ export class SwingAnalyzer {
     const prev = this.faultsThisSwing.get(key);
     if (!prev || ratio > prev.ratio) {
       this.faultsThisSwing.set(key, { ratio, phase: this.phase });
+      // 偏差创新高：本帧的标注/截图是该问题最严重的瞬间
+      this.updatedFaults.add(key);
     }
     this.liveFaults.push(key);
   }
@@ -573,6 +604,7 @@ export class SwingAnalyzer {
     this.finishStillSince = 0;
     this.maxRise = 0;
     this.maxHipDev = 0;
+    this.peakHandsY = Infinity;
     this.tBackswing = 0;
     this.tImpact = 0;
   }
