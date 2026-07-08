@@ -292,12 +292,18 @@ function loop() {
     // 阶段切换：截关键帧、记录视频模式的挥杆起点
     if (phase !== prevPhase) {
       if (
-        phase === PHASE.ADDRESS &&
+        (phase === PHASE.ADDRESS || phase === PHASE.IDLE) &&
         prevPhase !== PHASE.IDLE && prevPhase !== PHASE.ADDRESS
       ) {
-        // 动作被判定为无效（准备小动作/试挥收回）：清掉误捕的截图与关键帧
+        // 动作被判定为无效（准备小动作/弯腰摆球/走动）：清掉误捕的截图与关键帧
         snapshots.clear();
-        for (const k of ["top", "impact", "finish"]) keyframes.delete(k);
+        if (phase === PHASE.IDLE) {
+          // 基准已作废：全部关键帧重来，重新等待就位
+          keyframes.clear();
+          baselineAnnounced = false;
+        } else {
+          for (const k of ["top", "impact", "finish"]) keyframes.delete(k);
+        }
       }
       if (phase === PHASE.BACKSWING && state.source === "file")
         replaySegment.start = Math.max(0, video.currentTime - 1);

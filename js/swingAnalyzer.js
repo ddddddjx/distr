@@ -82,6 +82,8 @@ export class SwingAnalyzer {
     this.finishStillSince = 0;
     this.targetDir = 0;         // +1 / -1：目标方向（由上杆方向反推，免疫镜像）
     this.maxRise = 0;           // 本次动作中手的最大上抬幅度（躯干单位），用于过滤小动作
+    this.maxHipDev = 0;         // 本次动作中髋部相对基准的最大垂直偏移：
+                                // 挥杆时双脚钉地髋部高度几乎不变，弯腰摆球/起身/走动则大幅变化
     this.tBackswing = 0;        // 节奏计时：上杆开始 / 击球时刻
     this.tImpact = 0;
     this.bsPath = [];           // 上杆手部路径（OTT 判定用）
@@ -148,6 +150,13 @@ export class SwingAnalyzer {
     // 记录本次动作的最大上抬幅度（收束时用于过滤准备中的小动作）
     if (this.baseline && this.phase !== PHASE.IDLE && this.phase !== PHASE.ADDRESS) {
       this.maxRise = Math.max(this.maxRise, this.baseline.hands.y - f.hands.y);
+      // 髋部稳定性闸门：髋部大幅升降 = 弯腰/起身/走动，不是挥杆
+      const hipDev = Math.abs(f.hip.y - this.baseline.hip.y);
+      this.maxHipDev = Math.max(this.maxHipDev, hipDev);
+      if (hipDev > 0.5) {
+        this._reacquire();
+        return this._out();
+      }
     }
 
     switch (this.phase) {
@@ -226,6 +235,14 @@ export class SwingAnalyzer {
 
   _collectBaseline(lms, f, tMs) {
     if (this.baseline) {
+      // 球员离开准备位（走动/弯腰摆球/大幅调整站位）→ 旧基准作废，重新采集
+      if (
+        Math.abs(f.hip.y - this.baseline.hip.y) > 0.35 ||
+        Math.abs(f.hip.x - this.baseline.hip.x) > 0.6
+      ) {
+        this._reacquire();
+        return;
+      }
       // 基准已锁定：手明显抬高且带有明确向上速度才算上杆——
       // 压杆、举杆检查、waggle 等准备小动作（幅度通常 <0.15）不触发
       if (
@@ -258,6 +275,14 @@ export class SwingAnalyzer {
         // 侧面视角：球的方向 = 准备姿势时手相对髋的方向（用于 OTT 判定）
         ballDir: Math.sign(avgP("hands").x - avgP("hip").x) || 1,
       };
+      // 站姿合理性校验：髋-踝距离（腿长）不足 1 个躯干 = 蹲姿/坐姿
+      // （弯腰摆球时的短暂静止），不是击球准备姿势
+      if (this.useAnkleAnchor && Math.abs(this.baseline.hip.y) < 1.0) {
+        this.baseline = null;
+        this.addressFrames = [];
+        this.phase = PHASE.IDLE;
+        return;
+      }
       this._checkAddress(lms);
     }
   }
@@ -390,14 +415,25 @@ export class SwingAnalyzer {
     this.ottCount = 0;
     this.finishStillSince = 0;
     this.maxRise = 0;
+    this.maxHipDev = 0;
     this.tBackswing = 0;
     this.tImpact = 0;
   }
 
+  /** 球员离开准备位（走动/弯腰摆球）：连基准一起作废，重新等待就位 */
+  _reacquire() {
+    this._abortSwing();
+    this.baseline = null;
+    this.addressFrames = [];
+    this.phase = PHASE.IDLE;
+  }
+
   _finishSwing() {
-    // 最终校验：真实挥杆（哪怕半挥）手的最大上抬幅度 ≥0.45 躯干单位；
-    // 举杆检查、waggle 等小动作达不到 → 作废，不产生报告
-    if (this.maxRise < 0.45) {
+    // 最终校验（双闸门）：
+    // 1. 真实挥杆（哪怕半挥）手的最大上抬幅度 ≥0.45 躯干单位，
+    //    举杆检查、waggle 等小动作达不到；
+    // 2. 挥杆全程髋部高度基本不变（≤0.35 躯干），弯腰摆球/起身必超
+    if (this.maxRise < 0.45 || this.maxHipDev > 0.35) {
       this._abortSwing();
       return;
     }
