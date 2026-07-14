@@ -69,6 +69,7 @@ async function boot() {
   $("loading").classList.add("hidden");
   $("chooser").classList.remove("hidden");
   updateSessionBadge();
+  updateChromeInsets();
 }
 
 async function startLiveMode() {
@@ -181,7 +182,18 @@ function resizeOverlay() {
   overlay.width = video.videoWidth || overlay.clientWidth;
   overlay.height = video.videoHeight || overlay.clientHeight;
 }
-window.addEventListener("resize", resizeOverlay);
+
+/** 量出顶栏/控制面板的实际高度写入 CSS 变量：
+ *  视频模式的画面据此内缩，避免下半部分动作被工具栏遮挡 */
+function updateChromeInsets() {
+  const s = document.documentElement.style;
+  s.setProperty("--chrome-top", $("topbar").offsetHeight + "px");
+  s.setProperty("--chrome-bottom", $("controls").offsetHeight + "px");
+}
+window.addEventListener("resize", () => {
+  resizeOverlay();
+  updateChromeInsets();
+});
 
 /* ---------------- 视频文件模式 ---------------- */
 
@@ -195,6 +207,7 @@ async function enterFileMode(file) {
   video.classList.remove("mirrored");
   video.loop = false;
   $("stage").classList.add("file-mode");
+  updateChromeInsets();
   $("flipBtn").textContent = "返回相机";
   await new Promise((res) => (video.onloadedmetadata = res));
   resizeOverlay();
@@ -210,6 +223,7 @@ async function enterFileMode(file) {
 async function exitFileMode() {
   stopAnalysis();
   $("stage").classList.remove("file-mode");
+  updateChromeInsets();
   $("flipBtn").textContent = "切换镜头";
   try {
     await openCamera();
@@ -384,6 +398,9 @@ async function startAnalysis() {
   const btn = $("startBtn");
   btn.textContent = "停止分析";
   btn.classList.add("stop");
+  // 分析进行中收起配置行，扩大观看区域
+  $("controls").classList.add("running");
+  updateChromeInsets();
   if (state.source === "file") {
     video.currentTime = 0;
     detector.lastVideoTime = -1;
@@ -405,6 +422,8 @@ function stopAnalysis() {
   const btn = $("startBtn");
   btn.textContent = state.source === "file" ? "重新分析" : "开始分析";
   btn.classList.remove("stop");
+  $("controls").classList.remove("running");
+  updateChromeInsets();
   ctx.clearRect(0, 0, overlay.width, overlay.height);
   $("liveFaults").innerHTML = "";
   $("phasePill").textContent = "未开始";

@@ -87,6 +87,10 @@ button { font-family: var(--font); }
 #video.mirrored { transform: scaleX(-1); }
 #overlay { z-index: 2; }
 #stage.file-mode #video, #stage.file-mode #overlay { object-fit: contain; }
+/* 视频模式：画面内缩到顶栏与控制面板之间的可视区域，完整显示不被遮挡 */
+#stage.file-mode {
+  inset: var(--chrome-top, 56px) 0 var(--chrome-bottom, 150px) 0;
+}
 
 /* ============ 顶部导航栏（Navigation Bar 材质） ============ */
 #topbar {
@@ -182,7 +186,7 @@ button { font-family: var(--font); }
 
 .session-badge {
   position: absolute; right: var(--sp-4); z-index: 5;
-  bottom: calc(150px + env(safe-area-inset-bottom));
+  bottom: calc(var(--chrome-bottom, 150px) + 12px);
   padding: 7px 13px; border-radius: 999px;
   background: var(--material-regular);
   -webkit-backdrop-filter: var(--blur);
@@ -193,7 +197,7 @@ button { font-family: var(--font); }
 
 .hint {
   position: absolute; z-index: 5;
-  bottom: calc(190px + env(safe-area-inset-bottom));
+  bottom: calc(var(--chrome-bottom, 150px) + 52px);
   left: 50%; transform: translateX(-50%);
   max-width: calc(100% - 48px);
   padding: 10px var(--sp-4); border-radius: var(--r-sm);
@@ -218,6 +222,8 @@ button { font-family: var(--font); }
   display: flex; flex-direction: column; gap: var(--sp-2);
 }
 .row { display: flex; gap: var(--sp-2); }
+/* 分析进行中收起配置行：沉浸观看，只留停止按钮 */
+#controls.running .row-config { display: none; }
 
 /* iOS 分段控件（UISegmentedControl） */
 .seg {
