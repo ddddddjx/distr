@@ -81,6 +81,7 @@ export class SwingAnalyzer {
     this.handsVel = 0;          // 手部垂直速度：躯干单位/秒（时间基准，
                                 // 与推理帧率无关——低端设备 5fps 也能正确工作）
     this.sHands = null;         // 平滑后的手部位置（80ms EMA，抹平关键点抖动）
+    this.sHip = null;           // 平滑后的髋部位置（裙装等遮挡下髋部估计噪声大）
     this.peakHandsY = Infinity; // 本次上杆中手到过的最高点（y 最小值）
     this.updatedFaults = new Set(); // 本帧内偏差创新高的问题（截图取最严重瞬间用）
     this.topReachedAt = 0;
@@ -168,19 +169,26 @@ export class SwingAnalyzer {
       this.lastHandsY = null;
       this.lastT = null;
       this.sHands = null;
+      this.sHip = null;
       return this._out();
     }
 
-    // 可见度门控：手腕跟踪不可靠的帧（快速挥动的运动模糊）直接跳过，
-    // 避免坐标漂移污染相位判定与标注
+    // 可见度门控：手腕/髋部跟踪不可靠的帧直接跳过——
+    // 快速挥动的运动模糊，或裙装等服饰遮挡髋部时坐标会剧烈漂移
     const wristVis =
       ((lms[LM.L_WRIST].visibility ?? 1) + (lms[LM.R_WRIST].visibility ?? 1)) / 2;
-    if (wristVis < 0.35) return this._out();
+    const hipVis =
+      ((lms[LM.L_HIP].visibility ?? 1) + (lms[LM.R_HIP].visibility ?? 1)) / 2;
+    // 髋部门槛更宽（0.2）：裙装下可见度常年偏低，若与手腕同标准
+    // 会把整段视频跳光；低置信但非垃圾的帧交给 EMA 平滑兜底
+    if (wristVis < 0.35 || hipVis < 0.2) return this._out();
 
     const f = this._normalize(lms);
     if (!f) return this._out();
 
-    // 手部位置 80ms EMA 平滑：单帧关键点跳变不再影响相位与速度
+    // 手部/髋部位置 80ms EMA 平滑：单帧关键点跳变（运动模糊、裙摆
+    // 干扰髋部估计）不再影响相位判定与稳定性闸门；真实的弯腰起身
+    // 仍会在 2-3 帧内收敛并触发闸门
     if (this.sHands && this.lastT !== null && tMs > this.lastT) {
       const dtS = Math.min(0.5, (tMs - this.lastT) / 1000);
       const a = 1 - Math.exp(-dtS / 0.08);
@@ -188,8 +196,15 @@ export class SwingAnalyzer {
         x: this.sHands.x + (f.hands.x - this.sHands.x) * a,
         y: this.sHands.y + (f.hands.y - this.sHands.y) * a,
       };
+      if (this.sHip) {
+        f.hip = {
+          x: this.sHip.x + (f.hip.x - this.sHip.x) * a,
+          y: this.sHip.y + (f.hip.y - this.sHip.y) * a,
+        };
+      }
     }
     this.sHands = { x: f.hands.x, y: f.hands.y };
+    this.sHip = { x: f.hip.x, y: f.hip.y };
 
     if (this.lastHandsY !== null && tMs > this.lastT) {
       const dt = Math.min(0.5, (tMs - this.lastT) / 1000);
