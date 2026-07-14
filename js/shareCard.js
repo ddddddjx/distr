@@ -86,6 +86,19 @@ function drawCover(ctx, img, x, y, w, h, r) {
   ctx.restore();
 }
 
+/** 将图片完整收纳（contain）进圆角矩形：竖拍素材不裁头脚 */
+function drawContain(ctx, img, x, y, w, h, r) {
+  ctx.save();
+  roundRect(ctx, x, y, w, h, r);
+  ctx.clip();
+  ctx.fillStyle = "#0d130f";
+  ctx.fillRect(x, y, w, h);
+  const s = Math.min(w / img.width, h / img.height);
+  const dw = img.width * s, dh = img.height * s;
+  ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+  ctx.restore();
+}
+
 function newCanvas() {
   const c = document.createElement("canvas");
   c.width = W;
@@ -176,20 +189,40 @@ export async function buildSwingCard(summary, keyframes) {
   ctx.font = `600 40px ${FONT}`;
   ctx.fillText(`「 ${roastOf(summary)} 」`, W / 2, 786);
 
-  // 关键位置四宫格
+  // 关键位置四宫格：竖拍素材完整收纳（不裁头脚），横拍居中裁切
   const order = [["address", "准备"], ["top", "顶点"], ["impact", "击球"], ["finish", "收杆"]];
   const shots = order.filter(([k]) => keyframes.has(k));
   if (shots.length) {
-    const gap = 18, cw = (W - 120 - gap * (shots.length - 1)) / shots.length;
-    const ch = Math.min(cw * 1.25, 280), y0 = 836;
-    for (let i = 0; i < shots.length; i++) {
-      const img = await loadImage(keyframes.get(shots[i][0]));
-      const x = 60 + i * (cw + gap);
-      if (img) drawCover(ctx, img, x, y0, cw, ch, 16);
-      ctx.fillStyle = "rgba(235,245,237,0.55)";
-      ctx.font = `400 26px ${FONT}`;
-      ctx.textAlign = "center";
-      ctx.fillText(shots[i][1], x + cw / 2, y0 + ch + 38);
+    const imgs = await Promise.all(shots.map(([k]) => loadImage(keyframes.get(k))));
+    const first = imgs.find(Boolean);
+    const gap = 18;
+    const portrait = first && first.height > first.width;
+    if (portrait) {
+      // 竖版：格子按素材比例加高，整个人完整可见，条带整体居中
+      const ch = 316, y0 = 812;
+      const idealW = ch * (first.width / first.height);
+      const cw = Math.min(idealW, (W - 120 - gap * (shots.length - 1)) / shots.length);
+      const total = shots.length * cw + (shots.length - 1) * gap;
+      const x0 = (W - total) / 2;
+      for (let i = 0; i < shots.length; i++) {
+        const x = x0 + i * (cw + gap);
+        if (imgs[i]) drawContain(ctx, imgs[i], x, y0, cw, ch, 16);
+        ctx.fillStyle = "rgba(235,245,237,0.55)";
+        ctx.font = `400 26px ${FONT}`;
+        ctx.textAlign = "center";
+        ctx.fillText(shots[i][1], x + cw / 2, y0 + ch + 36);
+      }
+    } else {
+      const cw = (W - 120 - gap * (shots.length - 1)) / shots.length;
+      const ch = Math.min(cw * 1.25, 280), y0 = 836;
+      for (let i = 0; i < shots.length; i++) {
+        const x = 60 + i * (cw + gap);
+        if (imgs[i]) drawCover(ctx, imgs[i], x, y0, cw, ch, 16);
+        ctx.fillStyle = "rgba(235,245,237,0.55)";
+        ctx.font = `400 26px ${FONT}`;
+        ctx.textAlign = "center";
+        ctx.fillText(shots[i][1], x + cw / 2, y0 + ch + 38);
+      }
     }
   }
 

@@ -136,6 +136,23 @@ try {
       if (b64) fs.writeFileSync(path.join(outDir, `fault-${i}.jpg`), Buffer.from(b64, "base64"));
     });
     result.shotFiles = shots.length;
+    // 生成分享卡并导出，便于人工核对排版
+    try {
+      await page.click("#shareSummaryBtn");
+      await page.waitForSelector("#shareModal:not(.hidden)", { timeout: 15000 });
+      await page.waitForFunction(
+        () => (document.getElementById("shareImg").src || "").length > 1000,
+        { timeout: 15000 }
+      );
+      const cardSrc = await page.$eval("#shareImg", (e) => e.src);
+      fs.writeFileSync(
+        path.join(outDir, "share-card.jpg"),
+        Buffer.from(cardSrc.split(",")[1], "base64")
+      );
+      result.shareCard = true;
+    } catch {
+      result.shareCard = false;
+    }
     const m = (result.note || "").match(/(\d+)\s*次/);
     result.swings = m ? Number(m[1]) : 1;
   }
