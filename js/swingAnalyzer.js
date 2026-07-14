@@ -232,6 +232,16 @@ export class SwingAnalyzer {
         this._collectBaseline(lms, f, tMs);
         break;
       case PHASE.BACKSWING:
+        // 悬停检测：手在同一高度停留 >0.9s = 不是在挥杆，而是在举杆
+        // 瞄准/调整站位（如从闲站转入真正的准备姿势）→ 基准作废重来。
+        // 阈值兼顾慢动作视频（8x 慢放的上杆每 0.9s 仍会移动 >0.05）
+        if (Math.abs(f.hands.y - this.hoverY) > 0.05) {
+          this.hoverY = f.hands.y;
+          this.hoverSince = tMs;
+        } else if (tMs - this.hoverSince > 900) {
+          this._reacquire();
+          break;
+        }
         this._checkBackswing(lms, f);
         this.peakHandsY = Math.min(this.peakHandsY, f.hands.y);
         // 顶点判定：手已抬得足够高，且从本次最高点【实际回落】≥0.08 躯干。
@@ -349,10 +359,16 @@ export class SwingAnalyzer {
         // 侧面视角：球的方向 = 准备姿势时手相对髋的方向（用于 OTT 判定）
         ballDir: Math.sign(avgP("hands").x - avgP("hip").x) || 1,
       };
-      // 站姿合理性校验：髋-踝距离（腿长）明显小于躯干 = 蹲姿/坐姿
-      // （弯腰摆球时的短暂静止），不是击球准备姿势。
-      // 阈值取 0.85：兼容手机俯拍等透视压缩腿长的常见机位
-      if (this.useAnkleAnchor && Math.abs(this.baseline.hip.y) < 0.85) {
+      // 站姿合理性校验：
+      // 1. 髋-踝距离（腿长）明显小于躯干 = 蹲姿/坐姿（弯腰摆球时的
+      //    短暂静止），阈值 0.85 兼容手机俯拍等透视压缩腿长的机位；
+      // 2. 侧面视角下击球准备姿势应有明显前倾（≥10°）——直立闲站
+      //    （看镜头/等待）不是准备姿势，用它当基准会把之后弯身进入
+      //    真正站位的调整动作误评成一次挥杆
+      const notAddress =
+        (this.useAnkleAnchor && Math.abs(this.baseline.hip.y) < 0.85) ||
+        (this.view === "side" && this.baseline.spine < 10);
+      if (notAddress) {
         this.baseline = null;
         this.addressFrames = [];
         this.phase = PHASE.IDLE;
@@ -366,6 +382,9 @@ export class SwingAnalyzer {
     this.phase = PHASE.BACKSWING;
     this.tBackswing = tMs;
     this.peakHandsY = f.hands.y;
+    // 悬停检测参考点：真挥杆的上杆不会中途停住
+    this.hoverY = f.hands.y;
+    this.hoverSince = tMs;
     // 上杆时手远离目标 → 反推目标方向（与镜像、左右手均无关）
     this.targetDir = f.hands.x > this.baseline.hands.x ? -1 : 1;
     // 侧面视角记录上杆手部路径，下杆时对比判定 Over-the-Top
@@ -586,7 +605,8 @@ export class SwingAnalyzer {
   /** 侧面通用：起身 / 头部起伏（上杆和下杆都检查） */
   _checkPosture(lms, f) {
     const b = this.baseline;
-    const dSpine = Math.abs(f.spine - b.spine);
+    // 带方向：只有变得【更直】才是起身；弯得更低（如俯身调整）不算
+    const dSpine = b.spine - f.spine;
     if (dSpine > 13) {
       this._record("LOSS_OF_POSTURE", dSpine / 13);
       this._annotate("LOSS_OF_POSTURE", "绿虚线=开球时的前倾角度，红线=现在的上身：整个挥杆都要保持绿线的角度", [
