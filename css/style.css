@@ -313,6 +313,25 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
 .modal-card .ghost.wide { width: 100%; margin-top: var(--sp-1); }
 
 /* ============ 报告 Sheet ============ */
+/* 逐杆切换器 */
+.swing-tabs {
+  display: flex; gap: 6px; flex-wrap: wrap; justify-content: center;
+  margin-bottom: var(--sp-3);
+}
+.swing-tab {
+  border: 0; cursor: pointer;
+  padding: 7px 12px; border-radius: 999px;
+  background: var(--fill-3); color: var(--label-2);
+  font-size: var(--fs-footnote); font-weight: 500;
+  transition: all 0.2s var(--ease-std);
+}
+.swing-tab .st-score {
+  margin-left: 5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: var(--label-3);
+}
+.swing-tab.active { background: var(--green); color: #000; font-weight: 600; }
+.swing-tab.active .st-score { color: #000; }
+
 .snote {
   display: inline-block;
   padding: 5px var(--sp-3); border-radius: 999px;

@@ -224,6 +224,7 @@ async function exitFileMode() {
   stopAnalysis();
   $("stage").classList.remove("file-mode");
   updateChromeInsets();
+  updateSessionBadge();
   $("flipBtn").textContent = "切换镜头";
   try {
     await openCamera();
@@ -243,14 +244,26 @@ function concludeFileAnalysis() {
   const tail = analyzer.finalize();
   if (tail) videoSwings.push(packSwing(tail));
 
-  const chosen = videoSwings[videoSwings.length - 1];
   stopAnalysis();
-  if (chosen) {
-    restoreSwing(chosen);
-    showSummary(chosen.summary, videoSwings.length);
+  if (videoSwings.length) {
+    // 每次完整挥杆都独立计入练习历史，报告中可逐杆切换查看
+    videoSwings.forEach((sw) => saveSwing(sw.summary, "file"));
+    presentSwing(videoSwings.length - 1);
   } else {
     showHint("未识别到完整挥杆：请确认全身入镜、机位选择正确，且视频包含完整的挥杆动作", 5000);
   }
+}
+
+/** 呈现视频中的第 i 次挥杆（评分/回放/关键帧/标注均为该杆数据） */
+function presentSwing(i) {
+  const sw = videoSwings[i];
+  if (!sw) return;
+  restoreSwing(sw);
+  showSummary(sw.summary, {
+    count: videoSwings.length,
+    index: i,
+    celebrate: i === videoSwings.length - 1, // 切换查看时不重复撒彩带/震动
+  });
 }
 
 video.addEventListener("ended", () => {
@@ -362,6 +375,7 @@ function loop() {
           "summary",
           2000
         );
+        saveSwing(summary, "camera");
         showSummary(summary);
       }
     }
@@ -465,16 +479,18 @@ function renderLiveFaults(keys, phase, lms) {
 
 let lastSummary = null; // 分享卡数据源
 
-function showSummary(summary, swingCount = 1) {
-  saveSwing(summary, state.source); // 存入练习历史（仅元数据，不含视频）
+// 注意：存历史（saveSwing）由调用方负责——报告可反复切换查看，不能重复入库
+function showSummary(summary, opts = {}) {
+  const { count = 1, index = 0, celebrate: doCelebrate = true } = opts;
   lastSummary = summary;
   $("summaryTier").textContent =
     `${tierOf(summary.score)} · 预估击败 ${percentileOf(summary.score)}% 的球友`;
   $("summaryRoast").textContent = `「 ${roastOf(summary)} 」`;
-  navigator.vibrate?.(30); // 报告弹出的轻触觉反馈（支持的设备）
+  if (doCelebrate) navigator.vibrate?.(30); // 报告弹出的轻触觉反馈（支持的设备）
+  renderSwingTabs(count, index);
   const note = $("summaryNote");
-  if (swingCount > 1) {
-    note.textContent = `视频中检测到 ${swingCount} 次挥杆动作 · 已分析最后一次（通常为正式击球）`;
+  if (count > 1) {
+    note.textContent = `视频中检测到 ${count} 次完整挥杆 · 每杆独立评分，点上方切换`;
     note.classList.remove("hidden");
   } else {
     note.classList.add("hidden");
@@ -484,7 +500,7 @@ function showSummary(summary, swingCount = 1) {
   scoreEl.className =
     "score " + (score >= 85 ? "s-good" : score >= 65 ? "s-mid" : "s-bad");
   animateScore(scoreEl, score);       // 分数滚动揭晓
-  if (score >= 85) celebrate();       // 高分彩带：值得录屏的瞬间
+  if (doCelebrate && score >= 85) celebrate(); // 高分彩带：值得录屏的瞬间
   updateSessionBadge();
 
   renderTempo(tempo);
@@ -667,6 +683,7 @@ $("startBtn").addEventListener("click", () => {
     // 用户主动停止：不静默丢弃——已进入挥杆阶段则强制收束出报告
     const summary = analyzer.finalize();
     if (summary) {
+      saveSwing(summary, "camera");
       showSummary(summary); // 内部会先取走录制的回放，再停止
       stopAnalysis();
     } else {
@@ -741,11 +758,13 @@ function celebrate() {
 }
 
 function updateSessionBadge() {
+  const el = $("sessionBadge");
+  // 今日战绩是实时练习的角标；看视频的场景下展示会造成困惑
+  if (state.source === "file") { el.classList.add("hidden"); return; }
   const todayKey = new Date().toDateString();
   const today = getSwings().filter(
     (s) => new Date(s.t).toDateString() === todayKey
   );
-  const el = $("sessionBadge");
   if (!today.length) { el.classList.add("hidden"); return; }
   const best = Math.max(...today.map((s) => s.score));
   el.textContent = `今日第 ${today.length} 杆 · 最佳 ${best} 分`;
@@ -755,6 +774,28 @@ function updateSessionBadge() {
 $("closeOnboard").addEventListener("click", () => {
   $("onboardModal").classList.add("hidden");
   showHint(hintForView(), 4000);
+});
+
+/* 报告内逐杆切换器（视频中检测到多次挥杆时显示） */
+function renderSwingTabs(count, index) {
+  const el = $("swingTabs");
+  if (count < 2) {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = Array.from(
+    { length: count },
+    (_, i) =>
+      `<button class="swing-tab${i === index ? " active" : ""}" data-i="${i}">第 ${i + 1} 杆<span class="st-score">${videoSwings[i]?.summary.score ?? ""}</span></button>`
+  ).join("");
+  el.classList.remove("hidden");
+}
+
+$("swingTabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-i]");
+  if (!b) return;
+  presentSwing(Number(b.dataset.i));
 });
 
 /* ---------- 分享卡 ---------- */
