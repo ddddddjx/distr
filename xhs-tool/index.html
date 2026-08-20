@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0d1b12" />
+  <title>SwingCoach 挥杆回看训练器</title>
+  <link rel="stylesheet" href="./css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <div class="brand"><span class="brand-dot"></span>SwingCoach</div>
+      <span class="brand-sub">挥杆回看训练器</span>
+    </header>
+
+    <!-- 选择视频 -->
+    <section id="picker" class="panel">
+      <h1>像教练一样回看你的挥杆</h1>
+      <p class="lead">上传一段挥杆视频：慢放逐帧回看、画线自查动作、对比关键姿势、测挥杆节奏</p>
+      <div class="chips">
+        <span class="chip">完全本地</span>
+        <span class="chip">视频不上传</span>
+        <span class="chip">TPI 自查体系</span>
+      </div>
+      <button id="pickBtn" class="primary big">选择挥杆视频</button>
+      <p class="note">建议：侧面或正面机位、全身入镜、10-30 秒片段最佳</p>
+      <input type="file" id="fileInput" accept="video/*" hidden />
+    </section>
+
+    <!-- 播放器 -->
+    <section id="player" class="hidden">
+      <div id="stage">
+        <video id="video" playsinline muted></video>
+        <canvas id="draw"></canvas>
+        <!-- 对比模式：冻结帧叠加 -->
+        <img id="ghost" class="hidden" alt="" />
+      </div>
+
+      <!-- 画线工具栏 -->
+      <div class="toolbar" id="toolbar">
+        <button data-tool="line" class="tool active" title="直线">╱ 线</button>
+        <button data-tool="angle" class="tool" title="三点量角">∠ 角度</button>
+        <button data-tool="circle" class="tool" title="圆圈">◯ 圈</button>
+        <button id="colorBtn" class="tool color red" title="切换颜色"></button>
+        <button id="undoBtn" class="tool">撤销</button>
+        <button id="clearBtn" class="tool">清空</button>
+      </div>
+
+      <!-- 播放控制 -->
+      <div class="transport">
+        <button id="stepBack" class="ghost">⏮ 上一帧</button>
+        <button id="playBtn" class="primary">播放</button>
+        <button id="stepFwd" class="ghost">下一帧 ⏭</button>
+      </div>
+      <div class="transport speeds">
+        <button data-speed="0.25" class="seg-btn">0.25×</button>
+        <button data-speed="0.5" class="seg-btn active">0.5×</button>
+        <button data-speed="1" class="seg-btn">1×</button>
+        <input type="range" id="seek" min="0" max="1000" value="0" />
+      </div>
+
+      <!-- 功能区 tabs -->
+      <nav class="tabs">
+        <button data-tab="review" class="tab active">回看</button>
+        <button data-tab="compare" class="tab">对比</button>
+        <button data-tab="tempo" class="tab">节奏</button>
+        <button data-tab="check" class="tab">自查</button>
+      </nav>
+
+      <section id="tab-review" class="tabpane">
+        <p class="hint-text">拖动进度条到关键位置，用上方工具在画面上画线：沿脊柱画一条线看前倾角，上杆/下杆各画一条看挥杆平面。红=当前动作，绿=参考。</p>
+      </section>
+
+      <section id="tab-compare" class="tabpane hidden">
+        <p class="hint-text">把进度条拖到「准备姿势」按 A，再拖到「击球瞬间」按 B，滑动透明度对比两个姿势的差异（头部高度、脊柱角度是否一致）。</p>
+        <div class="row">
+          <button id="capA" class="ghost">📸 冻结 A（准备）</button>
+          <button id="capB" class="ghost">📸 冻结 B（击球）</button>
+        </div>
+        <div class="row slider-row hidden" id="ghostRow">
+          <span class="slabel">叠加</span>
+          <input type="range" id="ghostAlpha" min="0" max="100" value="50" />
+          <button id="ghostOff" class="mini">关闭</button>
+        </div>
+      </section>
+
+      <section id="tab-tempo" class="tabpane hidden">
+        <p class="hint-text">播放视频，在三个关键时刻按下按钮（可用慢速播放提高精度）。职业球员的节奏约为 3:1。</p>
+        <div class="row">
+          <button id="tapStart" class="ghost">① 起杆</button>
+          <button id="tapTop" class="ghost" disabled>② 顶点</button>
+          <button id="tapImpact" class="ghost" disabled>③ 击球</button>
+        </div>
+        <div id="tempoResult" class="tempo-result hidden"></div>
+        <button id="tempoReset" class="mini hidden">重新计</button>
+      </section>
+
+      <section id="tab-check" class="tabpane hidden">
+        <p class="hint-text">TPI 十二大挥杆特征自查：对照回放逐项检查，点亮你要主攻的问题。数据保存在本机。</p>
+        <div id="checklist"></div>
+      </section>
+
+      <button id="changeVideo" class="link-btn">更换视频</button>
+    </section>
+
+    <footer id="foot">
+      <p>本工具完全本地运行 · 视频与数据不离开手机</p>
+      <p class="foot-sub">检测体系参考 TPI / PGA 公开教学内容，与上述机构无官方关联 · 练习辅助，不替代专业教练</p>
+    </footer>
+  </div>
+
+  <script src="./js/data.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>

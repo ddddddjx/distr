@@ -1,0 +1,97 @@
+/* SwingCoach 挥杆回看训练器 — 小红书小工具版
+   Apple HIG 设计令牌（与主站一致的品牌语言），纯本地资源 */
+:root {
+  --green: #30d158; --red: #ff453a; --yellow: #ffd60a;
+  --bg: #000; --bg-2: #1c1c1e; --bg-3: #2c2c2e;
+  --label: #fff;
+  --label-2: rgba(235, 235, 245, 0.6);
+  --label-3: rgba(235, 235, 245, 0.3);
+  --fill: rgba(120, 120, 128, 0.36);
+  --fill-3: rgba(118, 118, 128, 0.24);
+  --separator: rgba(84, 84, 88, 0.6);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Noto Sans SC", sans-serif;
+  --r-sm: 10px; --r-md: 14px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { background: var(--bg); color: var(--label); font-family: var(--font); }
+#app { max-width: 560px; margin: 0 auto; padding: 0 16px 24px; }
+.hidden { display: none !important; }
+button { font-family: var(--font); cursor: pointer; }
+
+/* 顶栏 */
+#topbar { display: flex; align-items: baseline; gap: 10px; padding: 14px 2px 10px; }
+.brand { display: flex; align-items: center; gap: 7px; font-size: 17px; font-weight: 600; letter-spacing: -0.4px; }
+.brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px rgba(48,209,88,.8); }
+.brand-sub { font-size: 12px; color: var(--label-3); }
+
+/* 选择页 */
+.panel { text-align: center; padding: 28px 8px 8px; }
+.panel h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 10px; }
+.lead { font-size: 14px; color: var(--label-2); line-height: 1.6; margin-bottom: 16px; }
+.chips { display: flex; justify-content: center; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+.chip { padding: 5px 12px; border-radius: 999px; background: rgba(48,209,88,.13); color: var(--green); font-size: 12px; font-weight: 600; }
+.note { font-size: 12px; color: var(--label-3); margin-top: 12px; line-height: 1.5; }
+
+button.primary { border: 0; border-radius: var(--r-md); background: var(--green); color: #fff; font-size: 17px; font-weight: 600; padding: 15px; min-height: 50px; }
+button.primary.big { width: 100%; }
+button.primary:active { transform: scale(.97); opacity: .8; }
+button.ghost { border: 0; border-radius: var(--r-md); background: var(--fill-3); color: var(--label); font-size: 14px; padding: 12px; min-height: 44px; flex: 1; }
+button.ghost:active { opacity: .7; }
+button.ghost.done { background: rgba(48,209,88,.25); color: var(--green); font-weight: 600; }
+button.ghost:disabled { opacity: .35; }
+button.mini { border: 0; border-radius: 8px; background: var(--fill-3); color: var(--label-2); font-size: 12px; padding: 7px 12px; }
+.link-btn { display: block; margin: 16px auto 0; border: 0; background: transparent; color: var(--label-3); font-size: 12px; text-decoration: underline; }
+
+/* 播放器 */
+#stage { position: relative; border-radius: var(--r-md); overflow: hidden; background: #000; border: .33px solid var(--separator); }
+#video { display: block; width: 100%; max-height: 62vh; }
+#draw { position: absolute; inset: 0; z-index: 3; touch-action: none; }
+#ghost { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; z-index: 2; pointer-events: none; }
+
+/* 工具栏 */
+.toolbar { display: flex; gap: 6px; margin: 10px 0 8px; }
+.tool { flex: 1; border: 0; border-radius: 9px; background: var(--fill-3); color: var(--label-2); font-size: 12.5px; padding: 9px 2px; }
+.tool.active { background: #636366; color: var(--label); font-weight: 600; }
+.tool.color { flex: 0 0 40px; }
+.tool.color.red { background: var(--red); }
+.tool.color.green { background: var(--green); }
+
+/* 播放控制 */
+.transport { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+.transport .primary { flex: 1.2; padding: 12px; min-height: 44px; font-size: 15px; }
+.speeds .seg-btn { border: 0; border-radius: 9px; background: var(--fill-3); color: var(--label-2); font-size: 12.5px; padding: 9px 12px; }
+.speeds .seg-btn.active { background: #636366; color: var(--label); font-weight: 600; }
+#seek { flex: 1; accent-color: var(--green); }
+input[type="range"] { height: 28px; }
+
+/* Tabs */
+.tabs { display: flex; background: var(--fill-3); border-radius: 9px; padding: 2px; margin: 12px 0 10px; }
+.tab { flex: 1; border: 0; background: transparent; color: var(--label-2); font-size: 13px; padding: 8px 2px; border-radius: 7px; }
+.tab.active { background: #636366; color: var(--label); font-weight: 600; box-shadow: 0 3px 8px rgba(0,0,0,.28); }
+.tabpane { padding: 2px; }
+.hint-text { font-size: 13px; color: var(--label-2); line-height: 1.65; margin-bottom: 12px; }
+.row { display: flex; gap: 8px; margin-bottom: 10px; }
+.slider-row { align-items: center; }
+.slabel { font-size: 12px; color: var(--label-3); }
+#ghostAlpha { flex: 1; accent-color: var(--green); }
+
+/* 节奏 */
+.tempo-result { background: var(--bg-3); border-radius: var(--r-md); padding: 14px; font-size: 14px; line-height: 1.7; margin-bottom: 10px; }
+.tempo-result b { color: var(--green); font-size: 18px; }
+.tempo-result span { color: var(--label-2); font-size: 12.5px; }
+
+/* 自查清单 */
+.check-card { background: var(--bg-3); border-radius: var(--r-md); padding: 14px; margin-bottom: 10px; border: 1px solid transparent; }
+.check-card.on { border-color: rgba(48,209,88,.5); background: rgba(48,209,88,.08); }
+.cc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.cc-title { font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }
+.cc-tpi { font-size: 10px; font-weight: 600; color: var(--green); background: rgba(48,209,88,.14); border-radius: 999px; padding: 2px 8px; }
+.cc-mark { margin-left: auto; font-size: 11px; color: var(--label-3); }
+.check-card.on .cc-mark { color: var(--green); font-weight: 700; }
+.cc-block { font-size: 13px; color: var(--label-2); line-height: 1.6; margin-top: 6px; }
+.cc-block b { display: block; font-size: 11px; color: var(--label-3); letter-spacing: .4px; margin-bottom: 2px; }
+
+/* 页脚 */
+#foot { text-align: center; margin-top: 22px; }
+#foot p { font-size: 11px; color: var(--label-3); line-height: 1.7; }
+.foot-sub { opacity: .8; }
