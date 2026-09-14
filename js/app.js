@@ -1093,6 +1093,25 @@ bindSeg("handSeg", "hand", (h) => {
   analyzer = newAnalyzer();
 });
 
+// 传感器线装载（SENSOR_ENABLED）：动态 import 传感器模块（路径占位，
+// 由传感器线在独立模块交付），缺失/失败时安静回退 NullProvider。
+// 视觉线的任何行为不依赖其存在；两线仅通过 SwingSession 契约的 imu 块交互。
+let externalProvider = null;
+if (flag("SENSOR_ENABLED")) {
+  import("./providers/loadProvider.js")
+    .then(function (m) { return m.loadExternalProvider(); })
+    .then(async function (r) {
+      externalProvider = r.provider;
+      window.__sensorProvider = r.provider; // 调试句柄
+      const connected = await r.provider.connect().catch(function () { return false; });
+      console.info(
+        "[sensor] provider=" + r.source + " connected=" + connected +
+        (r.reason ? "（回退原因：" + r.reason + "）" : "")
+      );
+    })
+    .catch(function () { /* 装载器失败也不影响视觉主线 */ });
+}
+
 // exportSession 入口（EXPORT_ENABLED）：当前仅提供程序化调用（控制台/
 // 后续 UI 复用），把本次分析的各杆 summary 映射为 SwingSession 契约实例。
 // 动态 import：开关关闭时导出模块完全不加载。
