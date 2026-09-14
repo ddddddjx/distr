@@ -64,10 +64,14 @@ export class SwingAnalyzer {
   /**
    * @param {"front"|"side"} view 拍摄角度
    * @param {"right"|"left"} handedness 球员持杆习惯
+   * @param {object} [opts] 可选项。captureKeypoints=true 时为导出契约留存
+   *   降采样关键点与 P1/P10 时间戳（由调用方按 EXPORT_ENABLED 开关注入；
+   *   本类不感知 feature flag，保持纯净可测）。默认关闭，零内存零行为差异。
    */
-  constructor(view = "front", handedness = "right") {
+  constructor(view = "front", handedness = "right", opts = {}) {
     this.view = view;
     this.handedness = handedness;
+    this.captureKeypoints = !!opts.captureKeypoints;
     this.reset();
   }
 
@@ -100,6 +104,11 @@ export class SwingAnalyzer {
     // ruleKey -> { label, shapes }：问题截图上的可视化标注
     // （红=当前错误位置，绿虚线=正确参考），坐标为图像空间 0..1
     this.annotations = new Map();
+    // ---- 契约导出留存（仅 captureKeypoints 开启时使用，默认零开销） ----
+    this.kpBuffer = [];      // 降采样关键点帧：{ t, points: 33×[x,y,vis] }
+    this.lastKpT = -1;
+    this.tAddressLock = 0;   // 基准锁定时刻（契约 P1 语义）
+    this.tFinish = 0;        // 收杆判定时刻（契约 P10 语义）
   }
 
   get leadSide() {
@@ -205,6 +214,9 @@ export class SwingAnalyzer {
     }
     this.sHands = { x: f.hands.x, y: f.hands.y };
     this.sHip = { x: f.hip.x, y: f.hip.y };
+
+    // 契约导出留存：已过可见度门控的帧才收，≤15fps 降采样
+    if (this.captureKeypoints) this._captureKp(lms, tMs);
 
     if (this.lastHandsY !== null && tMs > this.lastT) {
       const dt = Math.min(0.5, (tMs - this.lastT) / 1000);
@@ -374,6 +386,7 @@ export class SwingAnalyzer {
         this.phase = PHASE.IDLE;
         return;
       }
+      this.tAddressLock = tMs; // 契约 P1：准备姿势锁定时刻
       this._checkAddress(lms);
     }
   }
@@ -650,6 +663,29 @@ export class SwingAnalyzer {
     this.baseline = null;
     this.addressFrames = [];
     this.phase = PHASE.IDLE;
+    // 基准作废：留存的关键点与 P1 一并作废，等重新就位后重录
+    this.kpBuffer = [];
+    this.lastKpT = -1;
+    this.tAddressLock = 0;
+  }
+
+  /** 契约导出留存：≤15fps 降采样收帧；等待阶段只保留最近 3 秒滚动窗口 */
+  _captureKp(lms, tMs) {
+    if (this.phase === PHASE.IDLE || this.phase === PHASE.FINISH) return;
+    if (tMs - this.lastKpT < 66) return;
+    this.lastKpT = tMs;
+    this.kpBuffer.push({
+      t: tMs,
+      points: lms.map((p) => [
+        Math.round(p.x * 1e4) / 1e4,
+        Math.round(p.y * 1e4) / 1e4,
+        Math.round((p.visibility ?? 1) * 1e3) / 1e3,
+      ]),
+    });
+    if (this.phase === PHASE.ADDRESS) {
+      const cutoff = tMs - 3000;
+      while (this.kpBuffer.length && this.kpBuffer[0].t < cutoff) this.kpBuffer.shift();
+    }
   }
 
   _finishSwing() {
@@ -688,6 +724,22 @@ export class SwingAnalyzer {
       if (back > 100 && down > 50) tempo = { back, down, ratio: back / down };
     }
     this.summary = { score, faults, view: this.view, tempo };
+    // 契约导出留存：随 summary 流经现有管道（packSwing/lastSummary），
+    // 报告与分享卡不读取该字段，行为不受影响
+    if (this.captureKeypoints) {
+      this.tFinish = this.lastT || 0;
+      this.summary.exportData = {
+        t: {
+          addressLock: this.tAddressLock || null,
+          backswing: this.tBackswing || null,
+          top: this.topReachedAt || null,
+          impact: this.tImpact || null,
+          finish: this.tFinish || null,
+        },
+        keypoints: this.kpBuffer,
+        kpFps: 15,
+      };
+    }
   }
 
   /** 视频播放结束等场景下强制结束本次挥杆：已进入挥杆阶段则直接生成报告 */
