@@ -4,7 +4,7 @@
 // UI 与现状完全一致。本仓库（视觉线）不产出 imu，数据由传感器线经
 // 契约注入后才会出现。
 import { RULES } from "./rules.js";
-import { LEGACY_TO_CODE } from "./exportSession.js";
+import { LEGACY_TO_CODE } from "./legacyCodeMap.js";
 
 // finding code → 中文标签：14 个视觉共享码复用 rules.js 标题（单一事实源），
 // 传感器线专属码在此补充；未知码回退显示原始 code（前向兼容新增码）。
