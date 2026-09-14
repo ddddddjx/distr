@@ -1,0 +1,104 @@
+{
+  "registry_version": "1.0.0",
+  "comment": "SwingSession findings 的 code 统一注册表：视觉线与传感器线共用。code 描述的是挥杆问题本身，与检测手段无关（同一问题未来可由 vision 或 imu 分别报出）。legacy_key 对应本仓库 js/rules.js 与 swingAnalyzer 中的历史键名。文案（标题/建议/锐评）留在各展示层，不进入契约。",
+  "codes": {
+    "spine_too_upright": {
+      "legacy_key": "SPINE_TOO_UPRIGHT",
+      "tpi_name": "PGA Setup",
+      "default_severity": "warn",
+      "detectable_by": ["vision"]
+    },
+    "spine_too_bent": {
+      "legacy_key": "SPINE_TOO_BENT",
+      "tpi_name": "PGA Setup",
+      "default_severity": "warn",
+      "detectable_by": ["vision"]
+    },
+    "c_posture": {
+      "legacy_key": "C_POSTURE",
+      "tpi_name": "C-Posture",
+      "default_severity": "warn",
+      "detectable_by": ["vision"]
+    },
+    "loss_of_posture": {
+      "legacy_key": "LOSS_OF_POSTURE",
+      "tpi_name": "Loss of Posture",
+      "default_severity": "bad",
+      "detectable_by": ["vision", "imu"]
+    },
+    "early_extension": {
+      "legacy_key": "EARLY_EXTENSION",
+      "tpi_name": "Early Extension",
+      "default_severity": "bad",
+      "detectable_by": ["vision", "imu"]
+    },
+    "over_the_top": {
+      "legacy_key": "OVER_THE_TOP",
+      "tpi_name": "Over-the-Top",
+      "default_severity": "bad",
+      "detectable_by": ["vision", "imu"]
+    },
+    "head_drop": {
+      "legacy_key": "HEAD_DROP",
+      "tpi_name": "PGA Low-point Control",
+      "default_severity": "warn",
+      "detectable_by": ["vision"]
+    },
+    "head_sway": {
+      "legacy_key": "HEAD_SWAY",
+      "tpi_name": "PGA Rotation Center",
+      "default_severity": "warn",
+      "detectable_by": ["vision"]
+    },
+    "hip_sway": {
+      "legacy_key": "HIP_SWAY",
+      "tpi_name": "Sway",
+      "default_severity": "bad",
+      "detectable_by": ["vision", "imu"]
+    },
+    "hip_slide": {
+      "legacy_key": "HIP_SLIDE",
+      "tpi_name": "Slide",
+      "default_severity": "warn",
+      "detectable_by": ["vision", "imu"]
+    },
+    "reverse_spine_angle": {
+      "legacy_key": "REVERSE_SPINE",
+      "tpi_name": "Reverse Spine Angle",
+      "default_severity": "bad",
+      "detectable_by": ["vision"]
+    },
+    "hanging_back": {
+      "legacy_key": "HANGING_BACK",
+      "tpi_name": "Hanging Back",
+      "default_severity": "warn",
+      "detectable_by": ["vision", "imu"]
+    },
+    "flat_shoulder_plane": {
+      "legacy_key": "FLAT_SHOULDER_PLANE",
+      "tpi_name": "Flat Shoulder Plane",
+      "default_severity": "warn",
+      "detectable_by": ["vision"]
+    },
+    "chicken_wing": {
+      "legacy_key": "CHICKEN_WING",
+      "tpi_name": "Chicken Wing",
+      "default_severity": "warn",
+      "detectable_by": ["vision", "imu"]
+    },
+    "casting": {
+      "legacy_key": null,
+      "tpi_name": "Casting / Early Release",
+      "default_severity": "bad",
+      "detectable_by": ["imu"],
+      "comment": "视觉线（2D）无法可靠检测，为传感器线预留"
+    },
+    "s_posture": {
+      "legacy_key": null,
+      "tpi_name": "S-Posture",
+      "default_severity": "warn",
+      "detectable_by": ["imu"],
+      "comment": "视觉线（2D）无法可靠检测，为传感器线预留"
+    }
+  }
+}

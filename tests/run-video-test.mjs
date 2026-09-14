@@ -5,6 +5,8 @@
 // 用法：
 //   node tests/run-video-test.mjs                              # 冒烟测试
 //   node tests/run-video-test.mjs tests/assets/a.webm [front|side] [playbackRate]
+//   FF=EXPORT_ENABLED node tests/run-video-test.mjs ...        # 开启 feature flag，
+//     分析完成后调用 window.__exportSession() 并用 schema/validate.js 校验契约产出
 //
 // 注意：Playwright 的 Chromium 不含 H.264 解码器，iPhone 拍摄的 mov/mp4
 // 需先转成 WebM：ffmpeg -i in.mov -vf scale=720:-2 -c:v libvpx -b:v 1.5M -an out.webm
@@ -61,7 +63,8 @@ page.on("console", (m) => {
 page.on("pageerror", (e) => result.consoleErrors.push("PAGEERROR: " + String(e).slice(0, 300)));
 
 try {
-  await page.goto(base, { waitUntil: "domcontentloaded" });
+  const ff = (process.env.FF || "").trim();
+  await page.goto(base + (ff ? "/?ff=" + ff : ""), { waitUntil: "domcontentloaded" });
   // 等模型加载完成、进入模式选择页（首次要读 25MB 本地模型，放宽到 3 分钟）
   await page.waitForSelector("#chooser:not(.hidden)", { timeout: 180000 });
   console.error("[ok] 应用启动完成，模型已加载");
@@ -150,8 +153,30 @@ try {
         Buffer.from(cardSrc.split(",")[1], "base64")
       );
       result.shareCard = true;
-    } catch {
+    } catch (e) {
+      void e;
       result.shareCard = false;
+    }
+    // EXPORT_ENABLED：调用导出钩子并在 Node 侧用契约校验器复核
+    if (ff.includes("EXPORT_ENABLED")) {
+      try {
+        const session = await page.evaluate(() => window.__exportSession());
+        const { validateSwingSession } = await import("../schema/validate.js");
+        const v = validateSwingSession(session);
+        result.export = {
+          valid: v.valid,
+          errors: v.errors.slice(0, 5),
+          swings: session.swings.length,
+          kpFrames: session.swings.map((s) => s.vision.keypoints_2d.length),
+          phases: session.swings.map((s) =>
+            Object.fromEntries(Object.entries(s.phases).filter(([, val]) => val !== null))
+          ),
+          findings: session.swings.map((s) => s.vision.findings.map((f) => f.code)),
+        };
+        fs.writeFileSync(path.join(outDir, "session.json"), JSON.stringify(session, null, 2));
+      } catch (e) {
+        result.export = { valid: false, errors: [String(e).slice(0, 300)] };
+      }
     }
     const m = (result.note || "").match(/(\d+)\s*次/);
     result.swings = m ? Number(m[1]) : 1;

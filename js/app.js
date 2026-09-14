@@ -5,6 +5,7 @@ import { RULES, SEVERITY } from "./rules.js";
 import { VoiceCoach } from "./voice.js";
 import { saveSwing, computeStats, getSwings, clearSwings } from "./store.js";
 import { buildSwingCard, buildWeeklyCard, tierOf, percentileOf, roastOf } from "./shareCard.js";
+import { flag } from "./flags.js";
 
 const APP_VERSION = "0.9.0";
 
@@ -28,7 +29,16 @@ const state = {
 
 const detector = new PoseDetector();
 const coach = new VoiceCoach();
-let analyzer = new SwingAnalyzer(state.view, state.handedness);
+
+// 分析器工厂：EXPORT_ENABLED 开启时让分析器为契约导出留存关键点与
+// P1/P10 时间戳（详见 schema/）；默认关闭，构造结果与旧行为完全一致
+function newAnalyzer() {
+  return new SwingAnalyzer(state.view, state.handedness, {
+    captureKeypoints: flag("EXPORT_ENABLED"),
+  });
+}
+
+let analyzer = newAnalyzer();
 // 每次挥杆中各问题首次出现瞬间的截图（报告中展示）
 const snapshots = new Map();
 let baselineAnnounced = false;
@@ -402,7 +412,7 @@ async function startAnalysis() {
       return;
     }
   }
-  analyzer = new SwingAnalyzer(state.view, state.handedness);
+  analyzer = newAnalyzer();
   resetPerSwing();
   videoSwings.length = 0;
   discardRecorder();
@@ -1073,15 +1083,48 @@ function bindSeg(segId, dataKey, onChange) {
 bindSeg("viewSeg", "view", (v) => {
   state.view = v;
   if (state.running) stopAnalysis();
-  analyzer = new SwingAnalyzer(state.view, state.handedness);
+  analyzer = newAnalyzer();
   showHint(state.source === "file" ? "机位已切换，点「开始分析」重新分析视频" : hintForView(), 4000);
 });
 
 bindSeg("handSeg", "hand", (h) => {
   state.handedness = h;
   if (state.running) stopAnalysis();
-  analyzer = new SwingAnalyzer(state.view, state.handedness);
+  analyzer = newAnalyzer();
 });
+
+// 传感器线装载（SENSOR_ENABLED）：动态 import 传感器模块（路径占位，
+// 由传感器线在独立模块交付），缺失/失败时安静回退 NullProvider。
+// 视觉线的任何行为不依赖其存在；两线仅通过 SwingSession 契约的 imu 块交互。
+let externalProvider = null;
+if (flag("SENSOR_ENABLED")) {
+  import("./providers/loadProvider.js")
+    .then(function (m) { return m.loadExternalProvider(); })
+    .then(async function (r) {
+      externalProvider = r.provider;
+      window.__sensorProvider = r.provider; // 调试句柄
+      const connected = await r.provider.connect().catch(function () { return false; });
+      console.info(
+        "[sensor] provider=" + r.source + " connected=" + connected +
+        (r.reason ? "（回退原因：" + r.reason + "）" : "")
+      );
+    })
+    .catch(function () { /* 装载器失败也不影响视觉主线 */ });
+}
+
+// exportSession 入口（EXPORT_ENABLED）：当前仅提供程序化调用（控制台/
+// 后续 UI 复用），把本次分析的各杆 summary 映射为 SwingSession 契约实例。
+// 动态 import：开关关闭时导出模块完全不加载。
+if (flag("EXPORT_ENABLED")) {
+  window.__exportSession = async function (opts) {
+    const { exportSession } = await import("./exportSession.js");
+    const summaries = videoSwings.length
+      ? videoSwings.map(function (s) { return s.summary; })
+      : lastSummary ? [lastSummary] : [];
+    if (!summaries.length) throw new Error("当前没有可导出的挥杆分析结果");
+    return exportSession(summaries, opts);
+  };
+}
 
 // PWA：离线缓存 + 可添加到主屏幕（顺带缓解 github.io 二次访问的不稳定）
 if ("serviceWorker" in navigator) {
