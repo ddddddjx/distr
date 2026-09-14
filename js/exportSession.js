@@ -3,25 +3,11 @@
 // 导出前强制 schema 校验：契约违规视为编程错误，直接抛出。
 // 本模块不触碰报告与分享卡的任何路径，仅在 EXPORT_ENABLED 开启时被动态加载。
 import { validateSwingSession, SCHEMA_VERSION } from "../schema/validate.js";
+import { LEGACY_TO_CODE } from "./legacyCodeMap.js";
 
-// 历史规则键 → 契约 code 的映射。与 schema/finding-codes.json 的一致性
-// 由 tests/export.test.mjs 强制（改漏任何一边测试即红）。
-export const LEGACY_TO_CODE = {
-  SPINE_TOO_UPRIGHT: "spine_too_upright",
-  SPINE_TOO_BENT: "spine_too_bent",
-  C_POSTURE: "c_posture",
-  LOSS_OF_POSTURE: "loss_of_posture",
-  EARLY_EXTENSION: "early_extension",
-  OVER_THE_TOP: "over_the_top",
-  HEAD_DROP: "head_drop",
-  HEAD_SWAY: "head_sway",
-  HIP_SWAY: "hip_sway",
-  HIP_SLIDE: "hip_slide",
-  REVERSE_SPINE: "reverse_spine_angle",
-  HANGING_BACK: "hanging_back",
-  FLAT_SHOULDER_PLANE: "flat_shoulder_plane",
-  CHICKEN_WING: "chicken_wing",
-};
+// LEGACY_TO_CODE 已抽至叶子模块（imuReport 静态加载也要用，
+// 不能让它拖动整个导出链进启动模块图），此处 re-export 保持兼容
+export { LEGACY_TO_CODE } from "./legacyCodeMap.js";
 
 const VISION_SOURCE = "swingcoach-web@mediapipe-pose-landmarker-lite";
 

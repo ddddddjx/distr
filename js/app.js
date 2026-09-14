@@ -6,6 +6,7 @@ import { VoiceCoach } from "./voice.js";
 import { saveSwing, computeStats, getSwings, clearSwings } from "./store.js";
 import { buildSwingCard, buildWeeklyCard, tierOf, percentileOf, roastOf } from "./shareCard.js";
 import { flag } from "./flags.js";
+import { renderImuBlockHtml } from "./imuReport.js";
 
 const APP_VERSION = "0.9.0";
 
@@ -516,6 +517,12 @@ function showSummary(summary, opts = {}) {
   renderTempo(tempo);
   showReplay();
   renderKeyframes();
+  // 步骤4 扩展点（IMU_REPORT_ENABLED）：summary.imu 为契约 imu 块，由
+  // 传感器线集成后注入；视觉线不产出，故当前恒为空——渲染器返回空串，
+  // UI 与现状一致。flag 关闭时同样注入空串，行为零差异。
+  $("imuBlock").innerHTML = flag("IMU_REPORT_ENABLED")
+    ? renderImuBlockHtml(summary.imu ?? null)
+    : "";
 
   const body = $("summaryBody");
   if (faults.length === 0) {

@@ -571,3 +571,26 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 #loadingText { color: var(--label-2); font-size: var(--fs-subhead); line-height: 1.5; }
+
+/* ============ 手腕数据区块（IMU_REPORT_ENABLED，imu 非空才渲染） ============ */
+.imu-block {
+  text-align: left;
+  background: var(--bg-3);
+  border-radius: var(--r-md);
+  padding: var(--sp-4); margin-bottom: var(--sp-3);
+  border-left: 3px solid var(--blue);
+}
+.imu-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.imu-title { font-size: var(--fs-subhead); font-weight: 700; letter-spacing: -0.2px; }
+.imu-src { margin-left: auto; font-size: var(--fs-caption2); color: var(--label-3); }
+.imu-devices { font-size: var(--fs-caption); color: var(--label-2); margin-bottom: var(--sp-2); }
+.imu-kv { display: flex; justify-content: space-between; font-size: var(--fs-footnote); padding: 3px 0; }
+.imu-k { color: var(--label-2); }
+.imu-v { font-variant-numeric: tabular-nums; font-weight: 600; }
+.imu-findings { display: flex; gap: 6px; flex-wrap: wrap; margin-top: var(--sp-2); }
+.imu-finding {
+  padding: 3px 10px; border-radius: 999px;
+  font-size: var(--fs-caption2); font-weight: 600;
+}
+.imu-finding.bad { background: rgba(255, 69, 58, 0.16); color: var(--red); }
+.imu-finding.warn { background: rgba(255, 214, 10, 0.16); color: var(--yellow); }
