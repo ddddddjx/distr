@@ -1,0 +1,25 @@
+# CI 门禁：PR 与 main 上运行单元测试。
+# 核心价值：schema 契约的一致性测试（validate.js 内嵌镜像 ↔
+# finding-codes.json ↔ rules.js/LEGACY_TO_CODE 三方对账）成为合并的
+# 硬性关口——视觉线与传感器线对契约的任何改动，漏改任何一边都会红。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    env:
+      # 单测不需要浏览器，跳过 playwright 的浏览器下载（省约 2 分钟）
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:unit
