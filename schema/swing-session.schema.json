@@ -1,0 +1,228 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://swingcoach.app/schema/swing-session/1.0.0",
+  "title": "SwingSession",
+  "description": "SwingCoach 视觉线与传感器线之间唯一的数据契约。两条产品线不共享代码与状态，仅通过本 schema 的实例交互。本文件是权威定义；schema/validate.js 提供与之等价的零依赖运行时校验（Node 与浏览器通用）。时间基准：每次挥杆内所有 t_ms 均相对该 swing 的 t0_ms（会话内单调毫秒时钟），跨模块对时以 t0_ms 为锚。",
+  "type": "object",
+  "required": ["schema_version", "session_id", "user_id", "captured_at", "swings"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "本契约的语义化版本，当前 1.0.0。消费方按主版本判断兼容性。"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 8,
+      "description": "一次练习会话的唯一 ID（UUID v4 推荐）"
+    },
+    "user_id": {
+      "type": ["string", "null"],
+      "description": "用户标识。本地无账号体系时为设备级持久 UUID；匿名导出可为 null。"
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "会话开始时刻，ISO 8601（含时区）"
+    },
+    "swings": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/swing" }
+    }
+  },
+  "definitions": {
+    "swing": {
+      "type": "object",
+      "required": ["swing_id", "t0_ms", "t_impact_ms", "phases", "vision", "imu", "annotations"],
+      "additionalProperties": false,
+      "properties": {
+        "swing_id": { "type": "string", "minLength": 4 },
+        "t0_ms": {
+          "type": "number",
+          "description": "本次挥杆的时间零点（会话内单调毫秒时钟的绝对值）。swing 内其余 t_ms 均为相对 t0_ms 的偏移。"
+        },
+        "t_impact_ms": {
+          "type": ["number", "null"],
+          "description": "击球时刻相对 t0_ms 的偏移毫秒；未检出为 null"
+        },
+        "phases": {
+          "type": "object",
+          "description": "P-System 十位置时间戳（相对 t0_ms 毫秒）。检测不到的位置为 null。视觉线 v1 仅能可靠提供 P1(准备锁定)/P2(起杆)/P4(顶点)/P7(击球)。",
+          "required": ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"],
+          "additionalProperties": false,
+          "properties": {
+            "P1": { "type": ["number", "null"] },
+            "P2": { "type": ["number", "null"] },
+            "P3": { "type": ["number", "null"] },
+            "P4": { "type": ["number", "null"] },
+            "P5": { "type": ["number", "null"] },
+            "P6": { "type": ["number", "null"] },
+            "P7": { "type": ["number", "null"] },
+            "P8": { "type": ["number", "null"] },
+            "P9": { "type": ["number", "null"] },
+            "P10": { "type": ["number", "null"] }
+          }
+        },
+        "vision": {
+          "description": "视觉分析块。与 imu 同级、彼此独立，任一为 null 合法。",
+          "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/vision" }]
+        },
+        "imu": {
+          "description": "传感器分析块（袖套双 IMU）。本仓库（视觉线）永远输出 null，由传感器线填充。",
+          "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/imu" }]
+        },
+        "annotations": {
+          "type": "array",
+          "description": "跨线通用的标注/事件（教练备注、用户标记等）",
+          "items": {
+            "type": "object",
+            "required": ["kind", "t_ms", "payload"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": { "type": "string", "minLength": 1 },
+              "t_ms": { "type": ["number", "null"] },
+              "payload": { "type": "object" }
+            }
+          }
+        }
+      }
+    },
+    "vision": {
+      "type": "object",
+      "required": ["source", "fps", "keypoints_2d", "keypoints_3d", "metrics", "score", "findings"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "产出方与模型标识，如 swingcoach-web@mediapipe-pose-landmarker-lite"
+        },
+        "fps": {
+          "type": ["number", "null"],
+          "description": "关键点序列的名义采样帧率（可能低于视频帧率，导出方可降采样）"
+        },
+        "keypoints_2d": {
+          "type": "array",
+          "description": "逐帧 2D 关键点。frame.points 为 [x, y, visibility] 三元组数组（归一化图像坐标 0..1），点序由 keypoint_format 决定。允许为空数组（导出方未开启关键点留存）。",
+          "items": {
+            "type": "object",
+            "required": ["t_ms", "points"],
+            "additionalProperties": false,
+            "properties": {
+              "t_ms": { "type": "number" },
+              "points": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "minItems": 3,
+                  "maxItems": 3,
+                  "items": { "type": "number" }
+                }
+              }
+            }
+          }
+        },
+        "keypoint_format": {
+          "type": "string",
+          "description": "点序约定，当前固定 mediapipe-pose-33",
+          "default": "mediapipe-pose-33"
+        },
+        "keypoints_3d": {
+          "type": "null",
+          "description": "v1 预留：云端 3D 提升后填充；当前恒为 null"
+        },
+        "metrics": {
+          "type": "object",
+          "description": "派生指标自由 KV（如 tempo_ratio、backswing_ms、view、max_hip_dev）。键名 snake_case。"
+        },
+        "score": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "findings": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/finding" }
+        }
+      }
+    },
+    "imu": {
+      "type": "object",
+      "required": ["source", "devices", "samples", "metrics", "findings"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "产出方标识，如 swingcoach-sleeve@fw1.2"
+        },
+        "devices": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["device_id", "placement", "sample_rate_hz"],
+            "additionalProperties": false,
+            "properties": {
+              "device_id": { "type": "string", "minLength": 1 },
+              "placement": { "type": "string", "enum": ["hand_back", "forearm"] },
+              "sample_rate_hz": { "type": "number", "description": "名义采样率，袖套为 200" },
+              "model": { "type": ["string", "null"] },
+              "firmware": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "samples": {
+          "type": "array",
+          "description": "按时间升序的原始样本流（可多设备交错，按 device_id 区分）",
+          "items": {
+            "type": "object",
+            "required": ["t_ms", "device_id", "acc", "gyro"],
+            "additionalProperties": false,
+            "properties": {
+              "t_ms": { "type": "number", "description": "相对 t0_ms 毫秒" },
+              "device_id": { "type": "string" },
+              "acc": { "$ref": "#/definitions/vec3", "description": "加速度 m/s^2" },
+              "gyro": { "$ref": "#/definitions/vec3", "description": "角速度 deg/s" },
+              "mag": {
+                "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/vec3" }],
+                "description": "磁力计（可选）"
+              }
+            }
+          }
+        },
+        "metrics": {
+          "type": "object",
+          "description": "派生指标自由 KV（如 wrist_release_ms、peak_gyro_dps）"
+        },
+        "findings": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/finding" }
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["code", "severity", "ratio", "phase", "t_ms"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "统一问题编码，必须存在于 schema/finding-codes.json 注册表"
+        },
+        "severity": { "type": "string", "enum": ["warn", "bad"] },
+        "ratio": {
+          "type": ["number", "null"],
+          "description": "偏差程度：1.0=刚到阈值，2.0=超出一倍；不适用为 null"
+        },
+        "phase": {
+          "type": ["string", "null"],
+          "enum": ["address", "backswing", "top", "downswing", "impact", "follow", "finish", null],
+          "description": "问题最严重时所处的挥杆阶段"
+        },
+        "t_ms": { "type": ["number", "null"], "description": "问题最严重时刻，相对 t0_ms 毫秒" }
+      }
+    },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    }
+  }
+}
