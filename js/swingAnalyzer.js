@@ -278,6 +278,14 @@ export class SwingAnalyzer {
         }
         break;
       case PHASE.DOWNSWING:
+        // 防悬挂：低帧率下击球瞬间可能整段漏采，下杆状态会一直挂着并
+        // 吞并下一次挥杆。真实下杆 <0.5s，8x 慢动作也 <3s，超 5s 必为
+        // 采样断档 → 已过顶点，按收束处理（与片尾 finalize 同语义：
+        // 幅度/髋稳闸门照常把关，P7 如实为 null），并解锁下一杆跟踪
+        if (tMs - this.topReachedAt > 5000) {
+          this._finishSwing();
+          break;
+        }
         this._checkDownswing(lms, f);
         // 手回到基准高度附近 → 击球区
         if (f.hands.y > this.baseline.hands.y - 0.15) {
@@ -287,6 +295,11 @@ export class SwingAnalyzer {
         }
         break;
       case PHASE.IMPACT:
+        // 同上：击球区停留超 5s 视为采样断档，按收束处理
+        if (tMs - this.tImpact > 5000) {
+          this._finishSwing();
+          break;
+        }
         this._checkImpact(lms, f);
         if (f.hands.y < this.baseline.hands.y - 0.25) {
           this.phase = PHASE.FOLLOW;

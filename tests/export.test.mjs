@@ -162,3 +162,14 @@ test("analyzer 捕获：ADDRESS 后开始收帧、等待期只保留 3s 滚动�
   assert.ok(off.baseline, "默认构造行为不变：仍能锁定基准");
   assert.equal(off.kpBuffer.length, 0, "默认关闭：零留存");
 });
+
+test("strikeDetection 判定落入契约 annotations[] 且通过校验", () => {
+  const sum = fakeSummary();
+  sum.strikeDetection = { has_strike: true, method: "audio_transient" };
+  const s = exportSession([sum]);
+  assert.equal(validateSwingSession(s).valid, true);
+  const ann = s.swings[0].annotations;
+  assert.equal(ann.length, 1);
+  assert.equal(ann[0].kind, "strike_detection");
+  assert.equal(ann[0].payload.has_strike, true);
+});

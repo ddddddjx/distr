@@ -50,6 +50,7 @@ let recorder = null;          // 实时模式：MediaRecorder
 let recChunks = [];
 let replayUrl = null;         // 实时模式：回放 blob URL
 const replaySegment = { start: 0, end: 0 }; // 视频模式：挥杆起止时间点
+let impactVideoT = null; // 当前挥杆的击球时刻（视频时间轴秒）
 // 视频模式：整段视频中检测到的每次完整挥杆（试挥+正式击球）。
 // 看完全片后只报告最后一次——实拍素材里正式击球几乎总是最后一挥。
 const videoSwings = [];
@@ -213,6 +214,7 @@ async function enterFileMode(file) {
   camSeq++; // 作废任何还在等待中的摄像头打开请求
   stopMediaSources();
   state.source = "file";
+  state.fileObj = file; // 保留原始文件引用：击球声定位需解码音轨
   state.fileUrl = URL.createObjectURL(file);
   video.src = state.fileUrl;
   video.classList.remove("mirrored");
@@ -250,30 +252,60 @@ async function exitFileMode() {
  * 若此刻正处于挥杆中（击球被剪到结尾/中途停止），先强制收束；
  * 然后报告最后一次挥杆——试挥/热身在前，正式击球几乎总是最后一挥。
  */
-function concludeFileAnalysis() {
+async function concludeFileAnalysis() {
   replaySegment.end = video.currentTime || video.duration || 0;
   const tail = analyzer.finalize();
   if (tail) videoSwings.push(packSwing(tail));
 
   stopAnalysis();
-  if (videoSwings.length) {
-    // 每次完整挥杆都独立计入练习历史，报告中可逐杆切换查看
-    videoSwings.forEach((sw) => saveSwing(sw.summary, "file"));
-    presentSwing(videoSwings.length - 1);
-  } else {
+  if (!videoSwings.length) {
     showHint("未识别到完整挥杆：请确认全身入镜、机位选择正确，且视频包含完整的挥杆动作", 5000);
+    return;
   }
+  // 击球声定位：区分试挥与正式挥杆（全本地解码；无音轨/失败一律降级）
+  let audioUsed = false;
+  try {
+    if (videoSwings.length > 1 && state.fileObj) {
+      const { extractImpactTimes, hasStrikeNear, hasStrikeInRange } = await import("./strikeAudio.js");
+      const peaks = await extractImpactTimes(state.fileObj);
+      if (peaks && peaks.length) {
+        for (const sw of videoSwings) {
+          // 优先按击球时刻点匹配；低帧率漏采 IMPACT 时退化为时间跨度匹配
+          sw.strike =
+            typeof sw.impactVideoT === "number"
+              ? hasStrikeNear(sw.impactVideoT, peaks)
+              : hasStrikeInRange(sw.segment.start + 0.5, sw.segment.end, peaks);
+          // 判定写入 summary，随 exportSession 落进契约 annotations[]
+          sw.summary.strikeDetection = {
+            has_strike: sw.strike === true,
+            method: "audio_transient",
+          };
+        }
+        // 仅当确实定位到击球声时才以"定位模式"呈现，避免误导
+        audioUsed = videoSwings.some((sw) => sw.strike === true);
+      }
+    }
+  } catch (e) {
+    /* 声学定位是增强能力，任何失败都不影响报告 */
+  }
+  // 每次完整挥杆都独立计入练习历史，报告中可逐杆切换查看
+  videoSwings.forEach((sw) => saveSwing(sw.summary, "file"));
+  // 默认展示：有击球声的最后一杆（正式挥）；无音频信号回退最后一杆
+  const { pickDefaultSwing } = await import("./strikeAudio.js");
+  const chosen = pickDefaultSwing(videoSwings.map((sw) => sw.strike));
+  presentSwing(chosen, { celebrate: true, audioUsed });
 }
 
 /** 呈现视频中的第 i 次挥杆（评分/回放/关键帧/标注均为该杆数据） */
-function presentSwing(i) {
+function presentSwing(i, opts = {}) {
   const sw = videoSwings[i];
   if (!sw) return;
   restoreSwing(sw);
   showSummary(sw.summary, {
     count: videoSwings.length,
     index: i,
-    celebrate: i === videoSwings.length - 1, // 切换查看时不重复撒彩带/震动
+    celebrate: !!opts.celebrate, // 切换查看时不重复撒彩带/震动
+    audioUsed: !!opts.audioUsed,
   });
 }
 
@@ -290,6 +322,8 @@ function packSwing(summary) {
     snapshots: new Map(snapshots),
     keyframes: new Map(keyframes),
     segment: { ...replaySegment },
+    impactVideoT, // 击球时刻（视频时间轴秒），供击球声对齐；未达击球相位为 null
+    strike: null, // 声学判定：true 有击球声 / false 无 / null 未知
   };
 }
 
@@ -309,6 +343,7 @@ function resetPerSwing() {
   baselineAnnounced = false;
   replaySegment.start = 0;
   replaySegment.end = 0;
+  impactVideoT = null;
 }
 
 /* ---------------- 推理主循环 ---------------- */
@@ -353,7 +388,11 @@ function loop() {
       if (phase === PHASE.BACKSWING && state.source === "file")
         replaySegment.start = Math.max(0, video.currentTime - 1);
       if (phase === PHASE.TOP) captureKeyframe("top", lms, mirrored);
-      if (phase === PHASE.IMPACT) captureKeyframe("impact", lms, mirrored);
+      if (phase === PHASE.IMPACT) {
+        captureKeyframe("impact", lms, mirrored);
+        // 记录击球时刻在视频时间轴上的位置（击球声对齐用）
+        if (state.source === "file") impactVideoT = video.currentTime;
+      }
       if (phase === PHASE.FINISH) captureKeyframe("finish", lms, mirrored);
       prevPhase = phase;
     }
@@ -501,7 +540,9 @@ function showSummary(summary, opts = {}) {
   renderSwingTabs(count, index);
   const note = $("summaryNote");
   if (count > 1) {
-    note.textContent = `视频中检测到 ${count} 次完整挥杆 · 每杆独立评分，点上方切换`;
+    note.textContent = opts.audioUsed
+      ? `检测到 ${count} 次挥杆 · 已按击球声定位正式挥杆（⛳），点上方切换`
+      : `视频中检测到 ${count} 次完整挥杆 · 每杆独立评分，点上方切换`;
     note.classList.remove("hidden");
   } else {
     note.classList.add("hidden");
@@ -801,11 +842,11 @@ function renderSwingTabs(count, index) {
     el.innerHTML = "";
     return;
   }
-  el.innerHTML = Array.from(
-    { length: count },
-    (_, i) =>
-      `<button class="swing-tab${i === index ? " active" : ""}" data-i="${i}">第 ${i + 1} 杆<span class="st-score">${videoSwings[i]?.summary.score ?? ""}</span></button>`
-  ).join("");
+  el.innerHTML = Array.from({ length: count }, (_, i) => {
+    const sw = videoSwings[i];
+    const mark = sw?.strike === true ? " ⛳" : sw?.strike === false ? '<span class="st-practice">试挥?</span>' : "";
+    return `<button class="swing-tab${i === index ? " active" : ""}" data-i="${i}">第 ${i + 1} 杆${mark}<span class="st-score">${sw?.summary.score ?? ""}</span></button>`;
+  }).join("");
   el.classList.remove("hidden");
 }
 

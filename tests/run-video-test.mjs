@@ -130,6 +130,10 @@ try {
     result.faults = await page.$$eval(".summary-item .si-title", (els) =>
       els.map((e) => e.textContent.trim())
     );
+    // 逐杆切换器状态（击球声定位的 ⛳/试挥标注与默认选中）
+    result.tabs = await page.$$eval(".swing-tab", (els) =>
+      els.map((e) => ({ text: e.textContent.trim(), active: e.classList.contains("active") }))
+    );
     // 导出报告中的标注截图，便于人工核对可视化效果
     const outDir = path.join(ROOT, "tests", "output");
     fs.mkdirSync(outDir, { recursive: true });
