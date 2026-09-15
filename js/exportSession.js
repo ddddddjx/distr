@@ -100,7 +100,9 @@ function mapSwing(summary, index) {
       findings,
     },
     imu: null, // 本仓库（视觉线）永远不产出 imu
-    annotations: [],
+    annotations: summary.strikeDetection
+      ? [{ kind: "strike_detection", t_ms: null, payload: summary.strikeDetection }]
+      : [],
   };
 }
 

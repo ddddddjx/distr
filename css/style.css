@@ -594,3 +594,10 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
 }
 .imu-finding.bad { background: rgba(255, 69, 58, 0.16); color: var(--red); }
 .imu-finding.warn { background: rgba(255, 214, 10, 0.16); color: var(--yellow); }
+
+/* 击球声定位：切换器上的试挥标注 */
+.st-practice {
+  margin-left: 4px;
+  font-size: 10px; color: var(--label-3);
+}
+.swing-tab.active .st-practice { color: rgba(0, 0, 0, 0.55); }
