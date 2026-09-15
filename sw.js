@@ -1,7 +1,7 @@
 // Service Worker：离线可用 + 大文件缓存优先。
 // 策略：vendor/（推理库、WASM、模型，约 25MB，极少变更）缓存优先；
 // 其余同源资源网络优先、失败回退缓存——保证代码更新及时可见。
-const CACHE = "swingcoach-v1";
+const CACHE = "swingcoach-v2"; // 改名换图标：升版本以清掉旧缓存中的图标与 manifest
 const VENDOR_PREFIX = "vendor/";
 
 self.addEventListener("install", (e) => {
