@@ -40,6 +40,46 @@ export class PoseDetector {
     });
   }
 
+  /** 预热：首帧推理要编译 GPU 着色器、初始化 WASM 算子，实测比稳态慢一个
+   *  数量级（无头环境 4405ms vs 345ms 中位）。必须在加载遮罩后面跑掉——
+   *  否则代价落在用户第一次分析上：那几秒里视频已经在播却无人推理，
+   *  骨骼叠加层停在旧帧（看着像"定位不准"），开头整段漏采导致准备姿势
+   *  基准锁不上，整段视频识别不到挥杆；重试一次反而正常。 */
+  async warmUp() {
+    if (!this.landmarker) return;
+    try {
+      const c = document.createElement("canvas");
+      c.width = 256;
+      c.height = 256;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, c.width, c.height);
+      this.landmarker.detectForVideo(c, 0);
+    } catch (e) {
+      /* 预热失败不致命：照常进入应用，最多退回原来的首帧偏慢 */
+    }
+  }
+
+  /** 开播前先对暂停的首帧推理一次。warmUp 已经摊掉大头，这里再兜一层：
+   *  无论首次推理花多久，都不会有视频内容在无人分析的情况下流过去。
+   *  返回前复位 lastVideoTime，正式循环仍会正常分析这一帧。 */
+  async prime(video) {
+    if (!this.landmarker) return;
+    try {
+      if (video.readyState < 2) {
+        await new Promise((res) => {
+          const done = () => res();
+          video.addEventListener("loadeddata", done, { once: true });
+          setTimeout(done, 3000); // 取不到首帧也不能卡住分析
+        });
+      }
+      if (video.videoWidth) this.landmarker.detectForVideo(video, performance.now());
+    } catch (e) {
+      /* 同上，失败不影响正常分析 */
+    }
+    this.lastVideoTime = -1;
+  }
+
   /**
    * 对当前视频帧做姿态推理。
    * 返回 undefined = 没有新帧（视频帧率低于渲染帧率时跳过该次渲染）；
