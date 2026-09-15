@@ -35,7 +35,7 @@
 | `js/providers/` | ExternalDataProvider 接口 + NullProvider + 动态装载 |
 | `js/imuReport.js` | 手腕数据区块纯渲染函数（imu 非空才渲染） |
 | `js/voice.js` / `js/shareCard.js` / `js/store.js` | 语音指导 / 分享卡生成 / 本地统计 |
-| `sw.js` | PWA：vendor 缓存优先、页面网络优先 |
+| `sw.js` | PWA：vendor 缓存优先（独立缓存，发布升版**不清**，否则每人重下 24MB）、外壳 install 预缓存、页面网络优先 |
 | `xhs-tool/` | 小红书小工具版（非 AI 回看训练器，容器无 WASM/无网络），独立维护 |
 
 ## 分析器关键设计（改动前必读）
@@ -64,6 +64,8 @@
 - `npm run test:unit`：53 个单测（schema/export/provider/imuReport/strike/analyzer），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
 - `node tests/run-video-test.mjs <video.webm> [front|side] [playbackRate]`：Playwright E2E，真实视频回归。加 `FF=EXPORT_ENABLED` 可校验导出契约。
 - E2E 环境须知：预装 Chromium 在 `/opt/pw-browsers/`（勿 `playwright install`）；**无 H.264 解码**，iPhone 素材要转 WebM（音轨 `-c:a libvorbis`；拼接必须 `filter_complex` 全重编码，concat demuxer 会断 vorbis 时间戳）；无头推理仅 ~3fps，用 playbackRate 0.25-0.5 补偿；本地静态服务 MIME 必须含 `.mjs`。
+- `node tests/sw-offline.mjs`：Service Worker 离线启动回归。守的是线上事故——网络优先分支回退缓存未命中时
+  `respondWith(undefined)` 会让导航直接失败，装到主屏幕的 PWA 启动后黑屏转白屏打不开。兜底必须返回真实 Response。
 - 测试素材在 `tests/assets/`（gitignored，容器重置后需重新转码生成）。
 
 ## 已知边界 / 待办
