@@ -8,6 +8,9 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <!-- iOS「添加到主屏幕」的默认名称只认这个标签，不读 manifest 的 short_name；
+       缺失时会退回冗长的 <title>，用户得手动改名 -->
+  <meta name="apple-mobile-web-app-title" content="JAYKAY Golf" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
