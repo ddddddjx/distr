@@ -49,6 +49,7 @@ let prevPhase = PHASE.IDLE;
 let recorder = null;          // 实时模式：MediaRecorder
 let recChunks = [];
 let replayUrl = null;         // 实时模式：回放 blob URL
+let replayFallbackTimer = 0;  // 回放没出帧时切到原生控件的兜底计时器
 const replaySegment = { start: 0, end: 0 }; // 视频模式：挥杆起止时间点
 let impactVideoT = null; // 当前挥杆的击球时刻（视频时间轴秒）
 // 视频模式：整段视频中检测到的每次完整挥杆（试挥+正式击球）。
@@ -677,11 +678,14 @@ function stopRecorderToReplay() {
     if (!blob.size) return;
     replayUrl = URL.createObjectURL(blob);
     const rv = $("replayVideo");
+    rv.poster = replayPoster();
+    rv.controls = false;
     rv.onloadeddata = () => { rv.playbackRate = 0.4; };
     rv.ontimeupdate = null;
     rv.src = replayUrl;
     rv.classList.remove("hidden");
-    rv.play().catch(() => {});
+    rv.play().catch(() => { rv.controls = true; });
+    armReplayFallback(rv);
   };
   try { recorder.stop(); } catch { /* 忽略 */ }
   recorder = null;
@@ -696,6 +700,24 @@ function discardRecorder() {
   recChunks = [];
 }
 
+/** 回放兜底封面：iOS 上报告里的第二个 video 元素经常拿不到解码资源、
+ *  或非用户手势的自动播放被拒——元素既不报错也不出帧，就是一片纯黑。
+ *  先铺一张本次挥杆的真实关键帧当 poster，至少不会是黑屏。 */
+function replayPoster() {
+  return (
+    keyframes.get("impact") || keyframes.get("top") ||
+    keyframes.get("address") || keyframes.get("finish") || ""
+  );
+}
+
+/** 出不了帧就露出原生播放按钮：用户一点就是合法手势，能把回放放出来。 */
+function armReplayFallback(rv) {
+  clearTimeout(replayFallbackTimer);
+  replayFallbackTimer = setTimeout(() => {
+    if (rv.paused || rv.readyState < 2) rv.controls = true;
+  }, 1500);
+}
+
 function showReplay() {
   const rv = $("replayVideo");
   if (state.source === "camera") {
@@ -705,16 +727,23 @@ function showReplay() {
   // 视频模式：对原视频做挥杆区间慢放循环
   if (!state.fileUrl || !replaySegment.end) return;
   const { start, end } = replaySegment;
+  rv.poster = replayPoster();
+  rv.controls = false;
   rv.src = state.fileUrl;
-  rv.onloadeddata = () => {
+  // 用 loadedmetadata 定位：它比 loadeddata 先到，seek 有更多时间完成
+  rv.onloadedmetadata = () => {
     rv.currentTime = start;
     rv.playbackRate = 0.4;
-    rv.play().catch(() => {});
+  };
+  rv.onloadeddata = () => {
+    rv.playbackRate = 0.4;
+    rv.play().catch(() => { rv.controls = true; });
   };
   rv.ontimeupdate = () => {
     if (rv.currentTime > end) rv.currentTime = start;
   };
   rv.classList.remove("hidden");
+  armReplayFallback(rv);
 }
 
 function cleanupReplay() {
@@ -722,6 +751,10 @@ function cleanupReplay() {
   rv.pause();
   rv.ontimeupdate = null;
   rv.onloadeddata = null;
+  rv.onloadedmetadata = null;
+  clearTimeout(replayFallbackTimer);
+  rv.controls = false;
+  rv.removeAttribute("poster");
   rv.removeAttribute("src");
   rv.classList.add("hidden");
   if (replayUrl) { URL.revokeObjectURL(replayUrl); replayUrl = null; }
