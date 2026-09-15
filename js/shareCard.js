@@ -126,7 +126,7 @@ function drawHeader(ctx, subtitle) {
   ctx.fillStyle = "#fff";
   ctx.font = `700 44px ${FONT}`;
   ctx.textAlign = "left";
-  ctx.fillText("SwingCoach", 116, 112);
+  ctx.fillText("JAYKAY Golf", 116, 112);
   ctx.fillStyle = "rgba(235,245,237,0.55)";
   ctx.font = `400 30px ${FONT}`;
   ctx.fillText(subtitle, 116, 158);

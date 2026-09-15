@@ -207,6 +207,17 @@ window.addEventListener("resize", () => {
   updateChromeInsets();
 });
 
+// 顶栏/控制面板的高度会随状态变化（分析中收起配置行、安全区变化、字号缩放），
+// 而视频模式的 stage 完全按 --chrome-* 内缩。只在状态切换点手动量高度依赖布局
+// 时机——iOS 上量到旧值时 stage 会停在旧位置，与控制面板之间露出黑带
+// （实测 174px 的旧值配 78px 的新高度 = 95px 黑带）。改用 ResizeObserver 持续
+// 跟踪，测量不再依赖调用时机；--chrome-* 不影响这两个元素自身，不会触发回环。
+if ("ResizeObserver" in window) {
+  const chromeRO = new ResizeObserver(updateChromeInsets);
+  chromeRO.observe($("topbar"));
+  chromeRO.observe($("controls"));
+}
+
 /* ---------------- 视频文件模式 ---------------- */
 
 async function enterFileMode(file) {
@@ -891,9 +902,9 @@ $("closeShare").addEventListener("click", () => {
 $("shareSend").addEventListener("click", async () => {
   try {
     const blob = await (await fetch($("shareImg").src)).blob();
-    const file = new File([blob], "swingcoach.jpg", { type: "image/jpeg" });
+    const file = new File([blob], "jaykay-golf.jpg", { type: "image/jpeg" });
     if (navigator.canShare?.({ files: [file] })) {
-      await navigator.share({ files: [file], title: "SwingCoach 挥杆成绩" });
+      await navigator.share({ files: [file], title: "JAYKAY Golf 挥杆成绩" });
     } else {
       showHint("当前浏览器不支持系统分享，请长按图片保存", 3000);
     }
@@ -1041,7 +1052,7 @@ function renderVoiceList() {
 }
 
 $("aboutLink").addEventListener("click", () => {
-  $("aboutVer").textContent = `SwingCoach v${APP_VERSION}`;
+  $("aboutVer").textContent = `JAYKAY Golf v${APP_VERSION}`;
   $("aboutModal").classList.remove("hidden");
 });
 
@@ -1052,7 +1063,7 @@ $("closeAbout").addEventListener("click", () => {
 $("feedbackBtn").addEventListener("click", () => {
   location.href =
     "mailto:ding1430829048@gmail.com?subject=" +
-    encodeURIComponent(`SwingCoach 反馈 (v${APP_VERSION})`);
+    encodeURIComponent(`JAYKAY Golf 反馈 (v${APP_VERSION})`);
 });
 
 // 清除本地数据：双击确认，避免误触

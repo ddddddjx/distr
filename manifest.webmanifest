@@ -1,6 +1,6 @@
 {
-  "name": "SwingCoach 高尔夫挥杆 AI 教练",
-  "short_name": "SwingCoach",
+  "name": "JAYKAY Golf 高尔夫挥杆 AI 教练",
+  "short_name": "JAYKAY Golf",
   "description": "免费 AI 挥杆分析：实时拍摄或上传视频，自动指出问题并给出改进练习。视频不上传，本地分析。",
   "start_url": ".",
   "scope": ".",
