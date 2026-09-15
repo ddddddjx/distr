@@ -35,13 +35,12 @@
 | `js/providers/` | ExternalDataProvider 接口 + NullProvider + 动态装载 |
 | `js/imuReport.js` | 手腕数据区块纯渲染函数（imu 非空才渲染） |
 | `js/voice.js` / `js/shareCard.js` / `js/store.js` | 语音指导 / 分享卡生成 / 本地统计 |
+| `sw.js` | PWA：vendor 缓存优先（独立缓存，发布升版**不清**，否则每人重下 24MB）、外壳 install 预缓存、页面网络优先 |
+| `xhs-tool/` | 小红书小工具版（非 AI 回看训练器，容器无 WASM/无网络），独立维护 |
 
 报告里的慢放回放（`#replayVideo`）**必须带 poster 兜底**：iOS 上这个第二个 video 元素常常拿不到解码资源、
 或非用户手势的自动播放被拒，既不报错也不出帧，结果就是一片纯黑。铺一张本次挥杆的真实关键帧当 poster，
 并在 1.5s 后仍未出帧时打开原生 `controls`，让用户一点即可播放。
-
-| `sw.js` | PWA：vendor 缓存优先（独立缓存，发布升版**不清**，否则每人重下 24MB）、外壳 install 预缓存、页面网络优先 |
-| `xhs-tool/` | 小红书小工具版（非 AI 回看训练器，容器无 WASM/无网络），独立维护 |
 
 ## 分析器关键设计（改动前必读）
 
