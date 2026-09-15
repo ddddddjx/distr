@@ -71,6 +71,9 @@ async function boot() {
     $("loadingText").textContent =
       "正在加载 AI 模型…首次使用需下载约 25MB，之后打开秒启动";
     await detector.init();
+    // 首帧推理比稳态慢一个数量级，摊在加载遮罩里跑掉
+    $("loadingText").textContent = "正在预热推理引擎…";
+    await detector.warmUp();
   } catch (err) {
     // 模型加载失败是致命错误，保留遮罩提示
     $("loadingText").textContent = "AI 模型加载失败，请检查网络后刷新页面。" + (err?.message || "");
@@ -479,6 +482,8 @@ async function startAnalysis() {
   if (state.source === "file") {
     video.currentTime = 0;
     detector.lastVideoTime = -1;
+    // 开播前先推理一次：任何残余的首帧开销都不该让视频内容白白流过去
+    await detector.prime(video);
     await video.play();
     showHint("正在分析视频…", 2500);
   } else {
