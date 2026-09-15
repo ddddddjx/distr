@@ -45,7 +45,10 @@
 - **时间基准化**：一切速度用"躯干单位/秒"，基准锁定 = 静止 600ms + ≥5 采样；不要假设 30fps（无头测试环境只有 ~3fps）。
 - **归一化陷阱**：转体让躯干 2D 投影缩短 20-30%，髋部偏移必须按**基准躯干**换算（`_hipDevFrom`），否则真挥杆被误杀。
 - 有效性闸门：maxRise≥0.45、maxHipDev≤0.35、腿长≥0.85、侧面锁基准要求 spine≥10°（防赛前直立闲站）、上杆悬停>0.9s 重采基准。
+  maxHipDev **只累计到击球为止**：送杆本就伴随重心转移与起身，算进去会误杀真实挥杆；弯腰摆球走不到送杆，防误判不受影响。
 - 防悬挂：DOWNSWING/IMPACT 超 5s 用 `_finishSwing` 收束（不是 abort——低采样环境击球窗口可能整段漏采）。
+- **过顶点即已成杆**：此后人走出画面（`!lms`）或髋部大位移（弯腰摆下一颗球）都先走 `_salvagePastTop()` 收束出报告，收不住才 reset/reacquire。
+  否则会出现"播完整段反而识别不到、中途手动停止却能识别"——两条收尾路径会把已经打完的那一杆静默丢掉（回归测试见 `tests/analyzer.test.mjs`）。
 - 平滑：hands+hip 80ms EMA；腕/髋可见度门控 0.35/0.2；峰值回落 0.08 判顶点。
 - 上传路径**绝不**开摄像头（历史 bug ×2）；摄像头只在用户显式选择实时模式后开启。
 
@@ -58,7 +61,7 @@
 
 ## 测试
 
-- `npm run test:unit`：48 个单测（schema/export/provider/imuReport/strike），CI 门禁。
+- `npm run test:unit`：53 个单测（schema/export/provider/imuReport/strike/analyzer），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
 - `node tests/run-video-test.mjs <video.webm> [front|side] [playbackRate]`：Playwright E2E，真实视频回归。加 `FF=EXPORT_ENABLED` 可校验导出契约。
 - E2E 环境须知：预装 Chromium 在 `/opt/pw-browsers/`（勿 `playwright install`）；**无 H.264 解码**，iPhone 素材要转 WebM（音轨 `-c:a libvorbis`；拼接必须 `filter_complex` 全重编码，concat demuxer 会断 vorbis 时间戳）；无头推理仅 ~3fps，用 playbackRate 0.25-0.5 补偿；本地静态服务 MIME 必须含 `.mjs`。
 - 测试素材在 `tests/assets/`（gitignored，容器重置后需重新转码生成）。

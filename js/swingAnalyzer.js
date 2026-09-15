@@ -172,8 +172,9 @@ export class SwingAnalyzer {
     this.summary = null;
     if (!lms) {
       if (this.phase !== PHASE.IDLE && this.phase !== PHASE.ADDRESS) {
-        // 人离开画面，放弃本次跟踪
-        this.reset();
+        // 人离开画面：已过顶点的那一杆其实已经打完（球手打完就走出取景框
+        // 很常见），先按收束出报告，收不住才放弃本次跟踪
+        if (!this._salvagePastTop()) this.reset();
       }
       this.lastHandsY = null;
       this.lastT = null;
@@ -229,10 +230,19 @@ export class SwingAnalyzer {
       this.maxRise = Math.max(this.maxRise, this.baseline.hands.y - f.hands.y);
       // 髋部稳定性闸门：髋部大幅升降 = 弯腰/起身/走动，不是挥杆
       const hipDev = this._hipDevFrom(f).dy;
-      this.maxHipDev = Math.max(this.maxHipDev, hipDev);
       if (hipDev > 0.5) {
+        // 这一帧（走动/弯腰摆下一颗球）根本不属于这一杆，所以不计入闸门——
+        // 否则会把已经打完的那一杆一起判死。已过顶点的先收束出报告，
+        // 收不住才连基准一起作废重来。
+        if (this._salvagePastTop()) return this._out();
         this._reacquire();
         return this._out();
+      }
+      // 只在挥杆本体（上杆→击球）累计：送杆阶段重心转移、球手顺势起身
+      // 本就会抬髋，把它算进"这是不是一次挥杆"的闸门只会误杀；而弯腰摆球
+      // 这类动作根本走不到送杆，防误判的作用不受影响。
+      if (this.phase !== PHASE.FOLLOW && this.phase !== PHASE.FINISH) {
+        this.maxHipDev = Math.max(this.maxHipDev, hipDev);
       }
     }
 
@@ -699,6 +709,17 @@ export class SwingAnalyzer {
       const cutoff = tMs - 3000;
       while (this.kpBuffer.length && this.kpBuffer[0].t < cutoff) this.kpBuffer.shift();
     }
+  }
+
+  /** 过了顶点就意味着这一杆实际已经打完。此后球手走出画面、弯腰摆下一颗球
+   *  这类"收尾动作"不该把整杆一起丢掉：先按收束处理（幅度与髋稳闸门照常
+   *  把关，不合格仍会被 _abortSwing 拦下），收住了返回 true，调用方不必再作废。
+   *  与 DOWNSWING/IMPACT 超时收束同语义。 */
+  _salvagePastTop() {
+    const pastTop = [PHASE.TOP, PHASE.DOWNSWING, PHASE.IMPACT, PHASE.FOLLOW];
+    if (!this.baseline || !pastTop.includes(this.phase)) return false;
+    this._finishSwing();
+    return this.phase === PHASE.FINISH;
   }
 
   _finishSwing() {
