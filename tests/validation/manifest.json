@@ -1,0 +1,5 @@
+{
+  "_comment": "素材标签补充。键是相对 tests/assets/validation/ 的路径；目录约定已能给出机位与主标签，这里只写目录表达不了的信息。字段：codes（覆盖标签，多问题素材用）、allow（职业选手个人特征放行，不计误报）、swings（期望杆数）、events（顶点/击球的视频秒数，启用相位误差统计）、playbackRate、note、source（来源 URL，务必填，方便追溯与版权核对）。",
+  "defaults": { "playbackRate": 0.5 },
+  "clips": {}
+}

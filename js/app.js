@@ -1221,6 +1221,13 @@ if (flag("EXPORT_ENABLED")) {
     if (!summaries.length) throw new Error("当前没有可导出的挥杆分析结果");
     return exportSession(summaries, opts);
   };
+  // 验证工具用：各杆在视频时间轴上的位置（秒），用于把导出的相对时间戳
+  // 换算回视频时间与人工标注的事件帧对照（tests/validation/）
+  window.__videoSwingsMeta = function () {
+    return videoSwings.map(function (s) {
+      return { impactVideoT: s.impactVideoT, segment: s.segment, strike: s.strike };
+    });
+  };
 }
 
 // PWA：离线缓存 + 可添加到主屏幕（顺带缓解 github.io 二次访问的不稳定）
