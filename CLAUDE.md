@@ -73,6 +73,7 @@
 - E2E 环境须知：预装 Chromium 在 `/opt/pw-browsers/`（勿 `playwright install`）；**无 H.264 解码**，iPhone 素材要转 WebM（音轨 `-c:a libvorbis`；拼接必须 `filter_complex` 全重编码，concat demuxer 会断 vorbis 时间戳）；无头推理仅 ~3fps，用 playbackRate 0.25-0.5 补偿；本地静态服务 MIME 必须含 `.mjs`。
 - `npm run test:validation`：规则精度验证（`tests/validation/`）。职业选手视频当阴性对照测误报率、刻意做错的视频当阳性样本测检出率，
   外加识别率、相位误差与职业节奏分布，产出 `tests/output/validation/report.md`。标签靠目录约定 + `manifest.json`，素材规范与转码命令见其 README。
+  职业对照集用 `golfdb-import.py` 从 GolfDB 标注（1400 杆、带 8 个事件帧）自动下载裁剪导入，相位真值随之写入 manifest。
 - `node tests/sw-offline.mjs`：Service Worker 离线启动回归。守的是线上事故——网络优先分支回退缓存未命中时
   `respondWith(undefined)` 会让导航直接失败，装到主屏幕的 PWA 启动后黑屏转白屏打不开。兜底必须返回真实 Response。
 - 测试素材在 `tests/assets/`（gitignored，容器重置后需重新转码生成）。

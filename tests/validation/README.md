@@ -24,6 +24,23 @@ tests/assets/validation/
 
 运行 `node tests/validation/run-validation.mjs init` 会把这些目录一次建好。
 
+## 职业对照集：直接从 GolfDB 导入
+
+GolfDB（McNally 等，CVPR-W 2019）有 1400 杆职业挥杆的标注：YouTube ID、球员、机位、慢动作与否、8 个关键事件帧号、球手裁剪框。
+其中侧面 585 杆、正面 461 杆、202 位球员。它不带视频，`golfdb-import.py` 负责下载原片、按裁剪框与事件帧裁出单杆、转 WebM，并把顶点/击球时刻写进 manifest：
+
+```bash
+pip install scipy yt-dlp            # 另需 ffmpeg/ffprobe 在 PATH
+python3 tests/validation/golfdb-import.py select --view side --slow 0 --limit 30   # 筛子集（可多次追加）
+python3 tests/validation/golfdb-import.py select --view front --limit 20
+python3 tests/validation/golfdb-import.py download                                  # yt-dlp，国内需翻墙
+python3 tests/validation/golfdb-import.py cut                                       # 裁剪 + 转码 → pro/<view>/golfdb-*.webm
+python3 tests/validation/golfdb-import.py manifest                                  # 写 events/source 到 manifest.json
+```
+
+每步幂等，已完成的自动跳过；`--dry-run` 只打印命令。默认每段视频只取 1 杆、每位球员最多 2 杆，以最大化多样性并减少下载量。
+标注帧号是在 30fps 原片上标的，下载格式已限定 ≤30fps；若相位误差表里出现整体接近 2 倍的偏差，先怀疑拿到了 60fps 流。
+
 ## 素材要求
 
 - 标准机位：侧面镜头在球手身后沿目标线，正面镜头正对胸口。斜后方、高机位的转播画面不要。
