@@ -65,6 +65,11 @@
 - 防悬挂：DOWNSWING/IMPACT 超 5s 用 `_finishSwing` 收束（不是 abort——低采样环境击球窗口可能整段漏采）。
 - **过顶点即已成杆**：此后人走出画面（`!lms`）或髋部大位移（弯腰摆下一颗球）都先走 `_salvagePastTop()` 收束出报告，收不住才 reset/reacquire。
   否则会出现"播完整段反而识别不到、中途手动停止却能识别"——两条收尾路径会把已经打完的那一杆静默丢掉（回归测试见 `tests/analyzer.test.mjs`）。
+- **但这两条路径都不许一帧定生死**：手机下杆那 0.25s 运动模糊最重，lite 模型经常连丢几帧。
+  单帧漏检当成"离场"会两头出错——顶点前 reset 掉整杆（识别不到），顶点后立刻收束（挥杆打到一半弹报告，用户实测过）。
+  故 `!lms` 要连续 `MISSING_MS`(600ms)、髋部离位要连续 `HIP_OUT_MS`(250ms) 才算数。
+  同理 `maxHipDev` 是只增不减的最大值，累计时取与上一帧的较小值（两帧腐蚀），
+  否则一帧裙装/模糊的髋部跳变就能把它顶过 0.35，让打完的一杆在 `_finishSwing` 里被静默判废。
 - 平滑：hands+hip 80ms EMA；腕/髋可见度门控 0.35/0.2；峰值回落 0.08 判顶点。
 - 上传路径**绝不**开摄像头（历史 bug ×2）；摄像头只在用户显式选择实时模式后开启。
 
@@ -77,7 +82,7 @@
 
 ## 测试
 
-- `npm run test:unit`：61 个单测（schema/export/provider/imuReport/strike/analyzer/cameraWatchdog），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
+- `npm run test:unit`：64 个单测（schema/export/provider/imuReport/strike/analyzer/cameraWatchdog），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
 - `node tests/run-video-test.mjs <video.webm> [front|side] [playbackRate]`：Playwright E2E，真实视频回归。加 `FF=EXPORT_ENABLED` 可校验导出契约。
 - E2E 环境须知：预装 Chromium 在 `/opt/pw-browsers/`（勿 `playwright install`）；**无 H.264 解码**，iPhone 素材要转 WebM（音轨 `-c:a libvorbis`；拼接必须 `filter_complex` 全重编码，concat demuxer 会断 vorbis 时间戳）；无头推理仅 ~3fps，用 playbackRate 0.25-0.5 补偿；本地静态服务 MIME 必须含 `.mjs`。
 - `node tests/preview-stall.mjs`：实时模式预览卡死恢复回归（假摄像头启动分析 → 暂停预览元素 /

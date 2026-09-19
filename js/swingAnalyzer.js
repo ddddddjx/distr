@@ -33,6 +33,15 @@ export const PHASE_LABEL = {
   [PHASE.FINISH]: "收杆完成",
 };
 
+// 画面里看不到人持续多久才算"离场"。手机上快速下杆的运动模糊会让 lite 模型
+// 连丢好几帧，单帧漏检绝不能当成离场：顶点之前会把整杆 reset 掉（整段识别不到），
+// 顶点之后会立刻收束（挥杆打到一半就弹出报告）。600ms 远大于漏检，也远小于
+// 真正走出取景框的时长。
+const MISSING_MS = 600;
+// 髋部离开准备位持续多久才算数。裙装遮挡 / 运动模糊会让单帧髋部估计跳变，
+// 同样不能一帧定生死（EMA 只能压住一部分）。
+const HIP_OUT_MS = 250;
+
 const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -90,6 +99,9 @@ export class SwingAnalyzer {
     this.updatedFaults = new Set(); // 本帧内偏差创新高的问题（截图取最严重瞬间用）
     this.topReachedAt = 0;
     this.finishStillSince = 0;
+    this.missingSince = 0;      // 连续检不到人的起始时刻（0 = 当前能看到人）
+    this.hipOutSince = 0;       // 髋部连续离开准备位的起始时刻
+    this.prevHipDev = 0;        // 上一帧的髋部偏移（用于抑制单帧跳变）
     this.targetDir = 0;         // +1 / -1：目标方向（由上杆方向反推，免疫镜像）
     this.maxRise = 0;           // 本次动作中手的最大上抬幅度（躯干单位），用于过滤小动作
     this.maxHipDev = 0;         // 本次动作中髋部相对基准的最大垂直偏移：
@@ -172,7 +184,13 @@ export class SwingAnalyzer {
     this.summary = null;
     if (!lms) {
       if (this.phase !== PHASE.IDLE && this.phase !== PHASE.ADDRESS) {
-        // 人离开画面：已过顶点的那一杆其实已经打完（球手打完就走出取景框
+        // 单帧漏检 ≠ 人离开画面！下杆那 0.25 秒运动模糊最重，lite 模型经常
+        // 连丢几帧。此处若立刻处置：顶点前 reset 会把整杆丢掉，顶点后收束
+        // 会在挥杆打到一半时弹出报告（用户实测："动作还没打完就给我打分了"）。
+        // 先记下断线时刻，持续 MISSING_MS 都看不到人才按"离场"处理。
+        if (!this.missingSince) this.missingSince = tMs;
+        if (tMs - this.missingSince < MISSING_MS) return this._out();
+        // 人是真的走了：已过顶点的那一杆其实已经打完（球手打完就走出取景框
         // 很常见），先按收束出报告，收不住才放弃本次跟踪
         if (!this._salvagePastTop()) this.reset();
       }
@@ -182,6 +200,8 @@ export class SwingAnalyzer {
       this.sHip = null;
       return this._out();
     }
+
+    this.missingSince = 0;
 
     // 可见度门控：手腕/髋部跟踪不可靠的帧直接跳过——
     // 快速挥动的运动模糊，或裙装等服饰遮挡髋部时坐标会剧烈漂移
@@ -231,19 +251,30 @@ export class SwingAnalyzer {
       // 髋部稳定性闸门：髋部大幅升降 = 弯腰/起身/走动，不是挥杆
       const hipDev = this._hipDevFrom(f).dy;
       if (hipDev > 0.5) {
-        // 这一帧（走动/弯腰摆下一颗球）根本不属于这一杆，所以不计入闸门——
+        // 同样不能一帧定生死：单帧髋部跳变（裙装、运动模糊）会让挥杆中途
+        // 直接收束出报告。连续 HIP_OUT_MS 都在准备位之外才算真的离位。
+        if (!this.hipOutSince) this.hipOutSince = tMs;
+        if (tMs - this.hipOutSince < HIP_OUT_MS) return this._out();
+        // 这些帧（走动/弯腰摆下一颗球）根本不属于这一杆，所以不计入闸门——
         // 否则会把已经打完的那一杆一起判死。已过顶点的先收束出报告，
         // 收不住才连基准一起作废重来。
         if (this._salvagePastTop()) return this._out();
         this._reacquire();
         return this._out();
       }
+      this.hipOutSince = 0;
       // 只在挥杆本体（上杆→击球）累计：送杆阶段重心转移、球手顺势起身
       // 本就会抬髋，把它算进"这是不是一次挥杆"的闸门只会误杀；而弯腰摆球
       // 这类动作根本走不到送杆，防误判的作用不受影响。
+      //
+      // 取与上一帧的较小值（两帧腐蚀）：maxHipDev 是只增不减的最大值，
+      // 一帧裙装/模糊造成的髋部跳变就能把它顶过 0.35，让打完的一杆在
+      // _finishSwing 里被静默判废（表现为"挥完了却没有报告"）。真实的
+      // 弯腰摆球会持续很多帧，不受这层腐蚀影响。
       if (this.phase !== PHASE.FOLLOW && this.phase !== PHASE.FINISH) {
-        this.maxHipDev = Math.max(this.maxHipDev, hipDev);
+        this.maxHipDev = Math.max(this.maxHipDev, Math.min(hipDev, this.prevHipDev));
       }
+      this.prevHipDev = hipDev;
     }
 
     switch (this.phase) {
