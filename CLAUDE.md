@@ -63,8 +63,10 @@
 就是新鲜手势，面板必定弹出。`AbortError`（用户自己取消）留在第二步等他再点；
 其他失败退回 `forceDownload`，两条路都不通就如实报错，**绝不显示"已保存"**。
 网页没有任何 API 能直接写相册——只能靠这张面板，文案要说清"选「存储视频」"。
-导出帧右上角画品牌水印（`drawWatermark`，绿点 + JAYKAY Golf + 半透明胶囊底衬，
-纯白背景上也读得清）。容器优先 mp4：iOS 存进相册只认它，webm 只能存到「文件」。拿不到 `captureStream`/`MediaRecorder`
+导出帧右上角画品牌水印（`drawWatermark`：`assets/logo-mark.png` 圆标 + JAYKAY Golf +
+半透明胶囊底衬，纯白背景上也读得清）。logo 必须**同源**加载（`loadLogo()`，已进 sw 预缓存）——
+跨源图会污染 canvas，被污染的 canvas 根本录不出流；取不到图则退回绿点，绝不因为一张图让导出失败。
+圆标不能画太小，里面还有小鸟和字，糊成一团就失去意义（当前 `1.15 × 字号`）。容器优先 mp4：iOS 存进相册只认它，webm 只能存到「文件」。拿不到 `captureStream`/`MediaRecorder`
 时降级为保存**原速**片段，并如实说明，不许假装是慢放。屏上倍速与导出倍速共用 `REPLAY_RATE` 常量，
 各写各的就会让存下来的文件和报告里看到的速度对不上。
 

@@ -44,6 +44,18 @@ try {
 
   const r = await page.evaluate(async (base) => {
     const ex = await import(base + "/js/replayExport.js");
+    // 水印用的是真 logo 图：同源加载，否则 canvas 被污染就录不出流了
+    const logo = await ex.loadLogo();
+    const logoOk = !!logo && logo.naturalWidth > 0;
+    // 有无 logo 必须画出不同的东西（证明 logo 真的参与了绘制，而不是静默退回绿点）
+    const probe = (withLogo) => {
+      const c = document.createElement("canvas"); c.width = 320; c.height = 200;
+      const x = c.getContext("2d");
+      x.fillStyle = "#808080"; x.fillRect(0, 0, 320, 200);
+      ex.drawWatermark(x, 320, 200, withLogo ? logo : null);
+      return c.toDataURL();
+    };
+    const logoDrawn = probe(true) !== probe(false);
     /** 造素材：2 秒、每帧变色的合成视频（模拟一次挥杆的回放片段） */
     const srcBlob = await new Promise((resolve) => {
       const c = document.createElement("canvas");
@@ -139,7 +151,7 @@ try {
 
     return {
       srcDur, outDur: await durationOf(out), outSize: out.size,
-      outType: out.type, wall, stamp,
+      outType: out.type, wall, stamp, logoOk, logoDrawn,
       progressCount: seen.length,
       progressMonotonic: seen.every((p, i) => i === 0 || p >= seen[i - 1]),
       progressEndsAtOne: seen[seen.length - 1] === 1,
@@ -162,6 +174,8 @@ try {
   // 源素材是逐帧变色的纯色块，右上角被半透明黑底胶囊压暗才说明水印画上了
   const marked = r.stamp.topRight < r.stamp.topLeft - 6;
   console.error(`[${marked ? "ok" : "FAIL"}] 右上角带 App 水印（右上亮度 ${r.stamp.topRight.toFixed(0)} < 左上 ${r.stamp.topLeft.toFixed(0)}）`);
+  const logoOk = r.logoOk && r.logoDrawn;
+  console.error(`[${logoOk ? "ok" : "FAIL"}] 水印用的是真 logo 图（同源加载成功、确实参与绘制）`);
 
   const prog = r.progressCount >= 3 && r.progressMonotonic && r.progressEndsAtOne;
   console.error(`[${prog ? "ok" : "FAIL"}] 转码进度实时回报 ${r.progressCount} 次、单调递增、收尾为 100%`);
@@ -169,7 +183,7 @@ try {
   const failFast = r.rejected && r.rejectWall < 5;
   console.error(`[${failFast ? "ok" : "FAIL"}] play() 被拒时立刻报错收尾（${r.rejectWall.toFixed(1)}s），不会白转圈到超时`);
 
-  ok = slower && r.outSize > 1000 && segOk && failFast && marked && prog;
+  ok = slower && r.outSize > 1000 && segOk && failFast && marked && prog && logoOk;
 } catch (err) {
   console.error("[FAIL] ", String(err).split("\n")[0]);
 } finally {
