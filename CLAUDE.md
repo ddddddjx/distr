@@ -35,6 +35,7 @@
 | `js/providers/` | ExternalDataProvider 接口 + NullProvider + 动态装载 |
 | `js/imuReport.js` | 手腕数据区块纯渲染函数（imu 非空才渲染） |
 | `js/voice.js` / `js/shareCard.js` / `js/store.js` | 语音指导 / 分享卡生成 / 本地统计 |
+| `js/frameGrid.js` | 上传视频的确定性采样网格（纯函数叶子模块）：同一段视频永远同一组帧 |
 | `js/cameraWatchdog.js` | 预览卡死判定（纯函数叶子模块）：none / resume / reopen / stop |
 | `js/replayExport.js` | 慢放回放导出（叶子模块，点按钮时才动态装载）：canvas 逐帧重编码 + 系统分享/下载 |
 | `sw.js` | PWA：vendor 缓存优先（独立缓存，发布升版**不清**，否则每人重下 24MB）、外壳 install 预缓存、页面网络优先 |
@@ -120,6 +121,29 @@ review-animations 标准。这些是"一个网页"与"一个 App"的分界线，
   返回动画名，拿它当"动画结束"的判据会永远等不到——要用 `document.getAnimations()`；
   ② 断言要取**数值**（`brightness < 0.99`），只判 `!== "none"` 的话 `brightness(1)` 也能蒙混过关。
 
+## 上传视频必须确定性逐帧（勿回退）
+
+**同一段视频两次分析分数不一样，是架构问题，不是玄学。** 旧实现"边播边抽帧"：
+视频实时播放，rAF 拿到哪一帧全看当时手机有多忙（MediaPipe 推理同步阻塞，一帧几十到
+几百毫秒，30fps 的视频实际只分析到 8–15 帧/秒）；而评分是**逐帧取最大偏差**
+（`_record` 里 `ratio > prev.ratio` 才更新），抽到的帧不同 → 峰值不同 → 分数不同。
+实测同一段视频跑两遍，抽到的帧集合**重合度只有 6%**。
+
+现在（`runFileAnalysis()` + `js/frameGrid.js`）：
+- **不播放**，`currentTime` 按 `sampleGrid()` 的固定网格（15fps）逐格 seek，等 `seeked` 再推理。
+  `<video autoplay>` 属性会让文件一装载就自动播放，`enterFileMode` 与循环里都要 `pause()`——
+  一旦在播就又回到"抽到哪帧看运气"。
+- 分析器的时间基准是**网格时刻**，不是 `performance.now()`，也不是 `video.currentTime`
+  （seek 会落到最近可解码帧，用实际落点会把机器差异重新引回来）。
+- **MediaPipe 的时间戳要单调**：它要求时间戳在 landmarker 整个生命周期内递增，而预热用的是
+  `performance.now()`（页面开越久数值越大）、视频时间轴却从 0 起——直接喂会抛
+  "Packet timestamp mismatch"。`PoseDetector._ts()` 维护游标，`beginTimeline()` 把视频时间
+  平移到游标之后（不是 clamp：clamp 会把所有帧压成 1ms 间隔，跟踪行为与真实节奏对不上）。
+- 代价：分析不再是实时，10 秒视频要等几十秒，必须给进度（顶栏显示百分比）。
+- 相机模式不受影响：现场只能实时，时间基准仍是墙钟。
+- 回归见 `tests/deterministic-analysis.mjs`（两次分析走过的帧时刻必须完全一致）
+  与 `tests/frameGrid.test.mjs`。
+
 ## 分析器关键设计（改动前必读）
 
 踩坑沉淀，勿轻易回退：
@@ -151,12 +175,14 @@ review-animations 标准。这些是"一个网页"与"一个 App"的分界线，
 
 ## 测试
 
-- `npm run test:unit`：71 个单测（schema/export/provider/imuReport/strike/analyzer/cameraWatchdog/replayExport），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
+- `npm run test:unit`：77 个单测（schema/export/provider/imuReport/strike/analyzer/cameraWatchdog/replayExport/frameGrid），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
 - `node tests/run-video-test.mjs <video.webm> [front|side] [playbackRate]`：Playwright E2E，真实视频回归。加 `FF=EXPORT_ENABLED` 可校验导出契约。
 - E2E 环境须知：预装 Chromium 在 `/opt/pw-browsers/`（勿 `playwright install`）；**无 H.264 解码**，iPhone 素材要转 WebM（音轨 `-c:a libvorbis`；拼接必须 `filter_complex` 全重编码，concat demuxer 会断 vorbis 时间戳）；无头推理仅 ~3fps，用 playbackRate 0.25-0.5 补偿；本地静态服务 MIME 必须含 `.mjs`。
 - `node tests/replay-export.mjs`：慢放导出回归（canvas 合成素材 → `renderSlowMotion`）。断言：
   产出时长 ≈ 源 ÷ 倍速、区间导出（上传视频模式）同样成立、右上角水印把画面压暗、
   进度回调单调递增且收尾 100%、`play()` 被拒时秒级报错不挂到超时。需要浏览器，不进 CI 门禁。
+- `node tests/deterministic-analysis.mjs`：上传视频分析确定性回归（同一段合成视频跑两遍，
+  断言分析期间视频不播放、两次走过的帧时刻完全一致、步长是固定的 1/15s）。需要浏览器。
 - `node tests/mobile-polish.mjs`：移动端原生手感基线回归（viewport-fit / 未禁缩放 /
   touch-action / user-select / text-size-adjust / overscroll / 无 transition:all /
   :active 覆盖面 / 393px 无横向溢出 / 减弱动态降级）。需要浏览器。
@@ -171,5 +197,7 @@ review-animations 标准。这些是"一个网页"与"一个 App"的分界线，
 ## 已知边界 / 待办
 
 - 嘈杂练习场邻位击球声可能误标 ⛳（仅标注，可一键切换纠正）；静音视频自动降级为旧行为。
-- 极低帧率下多挥杆相位可能收束不完整（靠 `hasStrikeInRange` 区间兜底）。
+- ~~极低帧率下多挥杆相位可能收束不完整~~：上传视频改成确定性逐帧后不再有漏采问题；
+  实时拍摄仍受设备算力影响。
+- 上传视频的「原声」开关在逐帧分析期间无声——逐帧不播放，没有可播的音频。
 - 用户暂缓：自购域名/国内托管迁移。小工具提审由用户自行操作。

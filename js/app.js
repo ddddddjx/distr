@@ -8,6 +8,7 @@ import { buildSwingCard, buildWeeklyCard, tierOf, percentileOf, roastOf } from "
 import { flag } from "./flags.js";
 import { renderImuBlockHtml } from "./imuReport.js";
 import { decideRecovery, STALL_MS } from "./cameraWatchdog.js";
+import { sampleGrid, estimateAnalysisSeconds } from "./frameGrid.js";
 
 const APP_VERSION = "0.9.0";
 
@@ -270,6 +271,10 @@ async function enterFileMode(file) {
   video.src = state.fileUrl;
   video.classList.remove("mirrored");
   video.loop = false;
+  // <video autoplay> 会让文件一装载就自动播放。逐帧分析要求暂停态：
+  // 一旦在播，取到哪一帧又回到"看当时手机多忙"，分数就不可复现了
+  video.autoplay = false;
+  video.pause();
   $("stage").classList.add("file-mode");
   updateChromeInsets();
   $("flipBtn").textContent = "返回相机";
@@ -415,6 +420,92 @@ function resetPerSwing() {
 
 /* ---------------- 推理主循环 ---------------- */
 
+/** 每帧的全部处理。两条路径共用：
+ *  - 相机模式：rAF 实时循环，时间基准是墙钟（现场只能如此）；
+ *  - 上传视频：确定性逐帧推进，时间基准是【视频时间轴】。
+ *  tMs 必须单调递增。 */
+function processFrame(lms, tMs) {
+  const mirrored = state.source === "camera" && state.facing === "user";
+  detector.draw(ctx, lms, mirrored);
+  const { phase, liveFaults, summary } = analyzer.update(lms, tMs);
+  renderPhase(phase);
+  renderLiveFaults(liveFaults, phase, lms);
+
+  // 准备姿势锁定：语音提示、截"准备"关键帧、实时模式开始录制回放
+  if (!baselineAnnounced && analyzer.baseline) {
+    baselineAnnounced = true;
+    captureKeyframe("address", lms, mirrored);
+    if (state.source === "camera") {
+      coach.say("姿势就位，开始挥杆吧", "ready", 2000);
+      startRecorder();
+    }
+  }
+  // 阶段切换：截关键帧、记录视频模式的挥杆起点
+  if (phase !== prevPhase) {
+    if (
+      (phase === PHASE.ADDRESS || phase === PHASE.IDLE) &&
+      prevPhase !== PHASE.IDLE && prevPhase !== PHASE.ADDRESS
+    ) {
+      // 动作被判定为无效（准备小动作/弯腰摆球/走动）：清掉误捕的截图与关键帧
+      snapshots.clear();
+      if (phase === PHASE.IDLE) {
+        // 基准已作废：全部关键帧重来，重新等待就位
+        keyframes.clear();
+        baselineAnnounced = false;
+        // 这一段录制跟着作废。留着不丢会让 startRecorder early-return，
+        // 之后每一杆的回放都还是这段从未收束的旧录像
+        discardRecorder();
+      } else {
+        for (const k of ["top", "impact", "finish"]) keyframes.delete(k);
+      }
+    }
+    if (phase === PHASE.BACKSWING && state.source === "file")
+      replaySegment.start = Math.max(0, video.currentTime - 1);
+    if (phase === PHASE.TOP) captureKeyframe("top", lms, mirrored);
+    if (phase === PHASE.IMPACT) {
+      captureKeyframe("impact", lms, mirrored);
+      // 记录击球时刻在视频时间轴上的位置（击球声对齐用）
+      if (state.source === "file") impactVideoT = video.currentTime;
+    }
+    if (phase === PHASE.FINISH) captureKeyframe("finish", lms, mirrored);
+    prevPhase = phase;
+  }
+  // 实时问题：语音播报 + 截取问题瞬间画面
+  for (const key of liveFaults) {
+    const rule = RULES[key];
+    if (rule?.voice) coach.say(rule.voice, key, 7000);
+    // 截图取偏差最严重的瞬间（首次触发常是擦线的临界帧，最不准）
+    if (lms && (!snapshots.has(key) || analyzer.updatedFaults.has(key))) {
+      // 带可视化标注的问题截图：红=当前动作，绿虚线=正确参考
+      const shot = detector.snapshot(
+        video, lms, mirrored, 480, analyzer.annotations.get(key)
+      );
+      if (shot) snapshots.set(key, shot);
+    }
+  }
+  if (summary) {
+    if (state.source === "file") {
+      // 上传视频：静默存档这次挥杆（可能只是试挥），看完整段视频后
+      // 由 ended 事件统一报告最后一次挥杆
+      replaySegment.end = video.currentTime + 0.3;
+      videoSwings.push(packSwing(summary));
+      resetPerSwing();
+      analyzer.nextSwing();
+    } else {
+      coach.say(
+        summary.faults.length
+          ? "挥杆完成，来看一下分析报告"
+          : "漂亮，这一杆没有明显问题",
+        "summary",
+        2000
+      );
+      saveSwing(summary, "camera");
+      showSummary(summary);
+    }
+  }
+
+}
+
 function loop() {
   state.rafId = requestAnimationFrame(loop);
   const now = performance.now();
@@ -422,92 +513,14 @@ function loop() {
   // 顺带避开 iOS 上"回放视频与摄像头预览抢资源"的窗口，也省电
   if (!$("summaryModal").classList.contains("hidden")) return;
   const lms = detector.detect(video, now);
-  // undefined = 视频没有新帧（文件帧率低于渲染帧率），跳过本次分析
+  // undefined = 没有新帧（相机预览被冻住），跳过本次分析
   if (lms === undefined) {
-    // 相机模式下持续没有新帧 = 预览被系统冻住，交给看门狗把画面救回来
-    if (state.source === "camera") watchPreview(now);
+    watchPreview(now);
   } else {
     lastFrameAt = now;
     resumeTries = 0;
     reopenTries = 0;
-    const mirrored = state.source === "camera" && state.facing === "user";
-    detector.draw(ctx, lms, mirrored);
-    const { phase, liveFaults, summary } = analyzer.update(lms, now);
-    renderPhase(phase);
-    renderLiveFaults(liveFaults, phase, lms);
-
-    // 准备姿势锁定：语音提示、截"准备"关键帧、实时模式开始录制回放
-    if (!baselineAnnounced && analyzer.baseline) {
-      baselineAnnounced = true;
-      captureKeyframe("address", lms, mirrored);
-      if (state.source === "camera") {
-        coach.say("姿势就位，开始挥杆吧", "ready", 2000);
-        startRecorder();
-      }
-    }
-    // 阶段切换：截关键帧、记录视频模式的挥杆起点
-    if (phase !== prevPhase) {
-      if (
-        (phase === PHASE.ADDRESS || phase === PHASE.IDLE) &&
-        prevPhase !== PHASE.IDLE && prevPhase !== PHASE.ADDRESS
-      ) {
-        // 动作被判定为无效（准备小动作/弯腰摆球/走动）：清掉误捕的截图与关键帧
-        snapshots.clear();
-        if (phase === PHASE.IDLE) {
-          // 基准已作废：全部关键帧重来，重新等待就位
-          keyframes.clear();
-          baselineAnnounced = false;
-          // 这一段录制跟着作废。留着不丢会让 startRecorder early-return，
-          // 之后每一杆的回放都还是这段从未收束的旧录像
-          discardRecorder();
-        } else {
-          for (const k of ["top", "impact", "finish"]) keyframes.delete(k);
-        }
-      }
-      if (phase === PHASE.BACKSWING && state.source === "file")
-        replaySegment.start = Math.max(0, video.currentTime - 1);
-      if (phase === PHASE.TOP) captureKeyframe("top", lms, mirrored);
-      if (phase === PHASE.IMPACT) {
-        captureKeyframe("impact", lms, mirrored);
-        // 记录击球时刻在视频时间轴上的位置（击球声对齐用）
-        if (state.source === "file") impactVideoT = video.currentTime;
-      }
-      if (phase === PHASE.FINISH) captureKeyframe("finish", lms, mirrored);
-      prevPhase = phase;
-    }
-    // 实时问题：语音播报 + 截取问题瞬间画面
-    for (const key of liveFaults) {
-      const rule = RULES[key];
-      if (rule?.voice) coach.say(rule.voice, key, 7000);
-      // 截图取偏差最严重的瞬间（首次触发常是擦线的临界帧，最不准）
-      if (lms && (!snapshots.has(key) || analyzer.updatedFaults.has(key))) {
-        // 带可视化标注的问题截图：红=当前动作，绿虚线=正确参考
-        const shot = detector.snapshot(
-          video, lms, mirrored, 480, analyzer.annotations.get(key)
-        );
-        if (shot) snapshots.set(key, shot);
-      }
-    }
-    if (summary) {
-      if (state.source === "file") {
-        // 上传视频：静默存档这次挥杆（可能只是试挥），看完整段视频后
-        // 由 ended 事件统一报告最后一次挥杆
-        replaySegment.end = video.currentTime + 0.3;
-        videoSwings.push(packSwing(summary));
-        resetPerSwing();
-        analyzer.nextSwing();
-      } else {
-        coach.say(
-          summary.faults.length
-            ? "挥杆完成，来看一下分析报告"
-            : "漂亮，这一杆没有明显问题",
-          "summary",
-          2000
-        );
-        saveSwing(summary, "camera");
-        showSummary(summary);
-      }
-    }
+    processFrame(lms, now);
   }
 
   // FPS 统计：只计真正完成推理的帧。rAF 空转不能显示成 60 FPS——
@@ -518,6 +531,52 @@ function loop() {
     state.frames = 0;
     state.fpsT0 = now;
   }
+}
+
+/* ---------------- 上传视频：确定性逐帧分析 ---------------- */
+
+/** seek 到指定时刻并等落定。卡住也要放行，不能把整段分析挂死 */
+function seekTo(t) {
+  return new Promise((res) => {
+    if (Math.abs(video.currentTime - t) < 0.001) return res();
+    let timer = 0;
+    const done = () => {
+      video.removeEventListener("seeked", done);
+      clearTimeout(timer);
+      res();
+    };
+    timer = setTimeout(done, 2000);
+    video.addEventListener("seeked", done);
+    try { video.currentTime = t; } catch (e) { done(); }
+  });
+}
+
+/** 让出一帧，好让画面刷新、「停止分析」点得动 */
+const nextPaint = () => new Promise((r) => requestAnimationFrame(r));
+
+/**
+ * 逐帧走完整段视频。时间基准用【网格时刻】而不是 video.currentTime：
+ * seek 会落到最近的可解码帧，用实际落点会把机器差异重新引回来。
+ */
+async function runFileAnalysis() {
+  const dur = Number.isFinite(video.duration) ? video.duration : 0;
+  const grid = sampleGrid(dur);
+  if (!grid.length) { showHint("读不到视频时长，无法分析", 4000); stopAnalysis(); return; }
+  video.pause();   // 关键：不播放。一播放就又变成"抽到哪帧看运气"
+  video.autoplay = false;
+  for (let i = 0; i < grid.length; i++) {
+    if (!state.running) return;         // 用户中途点了「停止分析」
+    const t = grid[i];
+    await seekTo(t);
+    if (!state.running) return;
+    // 时间基准用【网格时刻】而不是 video.currentTime：seek 会落到最近的
+    // 可解码帧，用实际落点会把机器差异重新引回来
+    const lms = detector.detectAt(video, t * 1000);
+    processFrame(lms, t * 1000);
+    $("fpsLabel").textContent = Math.round(((i + 1) / grid.length) * 100) + "%";
+    await nextPaint();
+  }
+  if (state.running) concludeFileAnalysis();
 }
 
 /* ---------------- 摄像头预览保活 ---------------- */
@@ -614,29 +673,27 @@ async function startAnalysis() {
   if (state.source === "file") {
     video.currentTime = 0;
     detector.lastVideoTime = -1;
-    // 开播前先推理一次：任何残余的首帧开销都不该让视频内容白白流过去
+    // 逐帧前先推理一次，把首帧的着色器编译/算子初始化开销摊掉
     await detector.prime(video);
-    try {
-      await video.play();
-      showHint("正在分析视频…", 2500);
-    } catch (err) {
-      // 带声音的播放更容易被自动播放策略拦下（prime() 的 await 可能已经把
-      // 用户手势耗掉了）。原来这行没有 try：一旦被拒，startAnalysis 直接抛出，
-      // 末尾的 loop() 再也跑不到——按钮显示"停止分析"却一帧都不分析。
-      if (!video.muted) {
-        state.sound = false;   // 只改当前会话，不覆盖用户的持久化偏好
-        applyVideoSound();
-        await video.play().catch(() => {});
-        showHint("浏览器拦截了带声音的播放，已静音播放。点顶栏「原声」可再开", 6000);
-      } else {
-        showHint("视频无法自动播放，请点一下画面再试", 5000);
-      }
-    }
-  } else {
-    // 上一轮若因系统中断停在冻结画面上，这里先把预览接回来再开跑
-    resumePreview();
-    showHint("摆好准备姿势并静止 1 秒，开始你的挥杆", 4000);
+    // 预热用的是 performance.now()，视频时间轴从 0 起——必须先接好时间戳游标
+    detector.beginTimeline();
+    const secs = estimateAnalysisSeconds(Number.isFinite(video.duration) ? video.duration : 0);
+    showHint(
+      `正在逐帧分析（约 ${secs} 秒）：同一段视频每次结果都一样，请别离开本页`,
+      6000
+    );
+    // 逐帧是异步的，自己跑完自己收尾，不进 rAF 循环
+    runFileAnalysis().catch((err) => {
+      // 别让异常变成一条无人接手的 Promise 拒绝：那样按钮会一直显示
+      // "停止分析"，用户却等不到任何结果
+      showHint("分析中断：" + (err?.message || err), 6000);
+      stopAnalysis();
+    });
+    return;
   }
+  // 上一轮若因系统中断停在冻结画面上，这里先把预览接回来再开跑
+  resumePreview();
+  showHint("摆好准备姿势并静止 1 秒，开始你的挥杆", 4000);
   loop();
 }
 

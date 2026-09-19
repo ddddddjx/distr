@@ -26,6 +26,19 @@ export class PoseDetector {
   constructor() {
     this.landmarker = null;
     this.lastVideoTime = -1;
+    // MediaPipe 的 VIDEO 模式要求时间戳在 landmarker 的【整个生命周期内】
+    // 单调递增，否则直接抛 "Packet timestamp mismatch"。预热与相机循环用的是
+    // performance.now()（页面开着越久数值越大），而上传视频的时间轴从 0 起——
+    // 直接喂 0 会被判成时间戳倒退。这里用游标 + 基准偏移把两种时间轴接起来。
+    this.lastTs = -1;
+    this.tsBase = 0;
+  }
+
+  /** 交给 MediaPipe 的时间戳：保证严格递增 */
+  _ts(preferred) {
+    const ts = Math.max(Math.round(preferred), this.lastTs + 1);
+    this.lastTs = ts;
+    return ts;
   }
 
   async init() {
@@ -54,7 +67,7 @@ export class PoseDetector {
       const ctx = c.getContext("2d");
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, c.width, c.height);
-      this.landmarker.detectForVideo(c, 0);
+      this.landmarker.detectForVideo(c, this._ts(0));
     } catch (e) {
       /* 预热失败不致命：照常进入应用，最多退回原来的首帧偏慢 */
     }
@@ -73,7 +86,7 @@ export class PoseDetector {
           setTimeout(done, 3000); // 取不到首帧也不能卡住分析
         });
       }
-      if (video.videoWidth) this.landmarker.detectForVideo(video, performance.now());
+      if (video.videoWidth) this.landmarker.detectForVideo(video, this._ts(performance.now()));
     } catch (e) {
       /* 同上，失败不影响正常分析 */
     }
@@ -88,10 +101,32 @@ export class PoseDetector {
   detect(video, nowMs) {
     if (!this.landmarker || video.currentTime === this.lastVideoTime) return undefined;
     this.lastVideoTime = video.currentTime;
-    const result = this.landmarker.detectForVideo(video, nowMs);
+    const result = this.landmarker.detectForVideo(video, this._ts(nowMs));
     return result.landmarks && result.landmarks.length > 0
       ? result.landmarks[0]
       : null;
+  }
+
+  /**
+   * 确定性逐帧分析用：调用方已经 seek 到指定时刻，这里不做"有没有新帧"的
+   * 判断（detect() 那条 lastVideoTime 短路是为实时循环准备的）。
+   * tMs 是【视频时间轴】的毫秒数，由 beginTimeline() 负责接到已有游标之后。
+   */
+  detectAt(video, tMs) {
+    if (!this.landmarker) return null;
+    this.lastVideoTime = video.currentTime;
+    // 平移到游标之后：既满足单调，又保留真实的帧间隔（直接 clamp 会把所有
+    // 帧压成 1ms 间隔，MediaPipe 的跟踪行为就跟真实节奏对不上了）
+    const result = this.landmarker.detectForVideo(video, this._ts(this.tsBase + tMs));
+    return result.landmarks && result.landmarks.length > 0
+      ? result.landmarks[0]
+      : null;
+  }
+
+  /** 开始一条新的时间线：把随后 detectAt() 的视频时间平移到当前游标之后。
+   *  上传视频每次开始分析前调用一次。 */
+  beginTimeline() {
+    this.tsBase = this.lastTs + 1;
   }
 
   /** 在叠加层上绘制骨骼连线和关键点 */
