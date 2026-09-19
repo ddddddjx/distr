@@ -15,6 +15,7 @@ test("同样的入参永远同样的网格（这正是分数可复现的根据�
 test("网格只由时长与采样率决定，与机器快慢无关", () => {
   assert.equal(sampleGrid(10, 15).length, 151);   // 0 到 10s，每 1/15s 一帧
   assert.equal(sampleGrid(10, 30).length, 301);
+  assert.equal(sampleGrid(10, 12).length, 121);
 });
 
 test("时刻递增且不越过片尾", () => {
@@ -31,9 +32,11 @@ test("非法时长返回空网格（调用方据此提示读不到时长）", ()
   assert.deepEqual(sampleGrid(5, 0), []);
 });
 
-test("采样率 15fps：快速下杆那 0.25s 仍能采到 3 帧以上", () => {
-  assert.equal(FILE_SAMPLE_FPS, 15);
-  assert.ok(0.25 * FILE_SAMPLE_FPS >= 3);
+test("采样率守住下限：快速下杆那 0.25s 至少采到 3 帧", () => {
+  // 采样率是准确度与耗时的折中。降到采不满 3 帧就会漏掉击球瞬间，
+  // 分数口径也跟着变——这条是下限，不是当前值的快照。
+  assert.ok(0.25 * FILE_SAMPLE_FPS >= 3, `当前 ${FILE_SAMPLE_FPS}fps 采不到 3 帧`);
+  // 配套的识别验证见 tests/analyzer.test.mjs「12fps 采样下仍能识别完整挥杆」
 });
 
 test("耗时预估随时长线性增长", () => {

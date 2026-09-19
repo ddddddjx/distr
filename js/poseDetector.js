@@ -43,6 +43,27 @@ export class PoseDetector {
     // 除非重建 landmarker。_ts() 保证我们自己不会倒退，这里是最后一道兜底：
     // 宁可降级成"这帧没检测到人"，也不能每帧抛异常、让用户对着一个静默失效的 App。
     this.broken = false;
+    // 逐帧分析的工作画布。两个作用：
+    // ① 省时间——手机素材常是 1080p/4K，直接喂 video 元素每帧都要上传一张
+    //    大纹理；预缩放到 640 宽实测省 17%（源越大省得越多），而模型内部
+    //    本来就会缩到 256×256，几乎不损精度；
+    // ② 修黑屏——iOS 上"暂停 + seek"的 video 元素经常不往屏幕上合成，
+    //    逐帧分析时用户只看到一片黑。我们自己把帧画出来就绕开了这件事。
+    this.work = null;
+  }
+
+  /** 把一帧缩进工作画布（返回该画布，供推理与显示共用） */
+  _toWork(video, maxW = 640) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return video;
+    if (!this.work) this.work = document.createElement("canvas");
+    const scale = Math.min(1, maxW / vw);
+    const w = Math.round(vw * scale), h = Math.round(vh * scale);
+    if (this.work.width !== w || this.work.height !== h) {
+      this.work.width = w; this.work.height = h;
+    }
+    this.work.getContext("2d").drawImage(video, 0, 0, w, h);
+    return this.work;
   }
 
   /** 统一的推理出口：图一旦坏掉就降级为 null，并且只报一次 */
@@ -136,14 +157,15 @@ export class PoseDetector {
   detectAt(video, tMs) {
     if (!this.landmarker) return null;
     this.lastVideoTime = video.currentTime;
+    const src = this._toWork(video);
     // 无状态模式下走 detect()：不吃时间戳，也不带跟踪状态——这正是
     // "同一段视频两次分数一致"的前提
     return this._run(() =>
       this.stateless
-        ? this.landmarker.detect(video)
+        ? this.landmarker.detect(src)
         // 兜底（未能切到 IMAGE 模式时）：平移到游标之后，既满足单调又保留
         // 真实帧间隔（直接 clamp 会把所有帧压成 1ms 间隔）
-        : this.landmarker.detectForVideo(video, this._ts(this.tsBase + tMs))
+        : this.landmarker.detectForVideo(src, this._ts(this.tsBase + tMs))
     );
   }
 
@@ -165,10 +187,12 @@ export class PoseDetector {
   }
 
   /** 在叠加层上绘制骨骼连线和关键点 */
-  draw(ctx, landmarks, mirrored) {
+  draw(ctx, landmarks, mirrored, bg = null) {
     const { canvas } = ctx;
     ctx.save();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // 逐帧分析时 video 元素在 iOS 上不往屏幕合成，帧得我们自己画上去
+    if (bg) { try { ctx.drawImage(bg, 0, 0, canvas.width, canvas.height); } catch (e) { /* 忽略 */ } }
     if (!landmarks) { ctx.restore(); return; }
     if (mirrored) {
       ctx.translate(canvas.width, 0);

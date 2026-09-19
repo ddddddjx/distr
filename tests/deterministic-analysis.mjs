@@ -9,7 +9,7 @@
 // 这里断言三件事：
 //   1. 分析期间视频【不播放】（一播放就又回到"抽到哪帧看运气"）；
 //   2. 两次分析走过的帧时刻【完全一致】；
-//   3. 喂给分析器的时间戳来自视频时间轴、单调递增（不是墙钟 performance.now）。
+//   3. 步长固定（跟 frameGrid 的采样率一致）。
 import { chromium } from "playwright";
 import http from "node:http";
 import fs from "node:fs";
@@ -98,34 +98,51 @@ try {
     // 分析期间反复确认视频没有在播
     const watcher = page.evaluate(() => new Promise((res) => {
       const v = document.getElementById("video");
+      // 逐帧分析期间画面不能是黑的。iOS 上"暂停 + seek"的 video 元素不往屏幕
+      // 合成，必须我们自己把帧画进 overlay——用户实测过：改完之后一片全黑。
+      window.__sawPixels = false;
+      const ov = document.getElementById("overlay");
+      const probe = setInterval(() => {
+        try {
+          const g = ov.getContext("2d");
+          const d = g.getImageData(Math.floor(ov.width / 2), Math.floor(ov.height / 2), 1, 1).data;
+          if (d[0] + d[1] + d[2] > 24) window.__sawPixels = true;
+        } catch (e) { /* 画布还没尺寸 */ }
+      }, 60);
       const t = setInterval(() => { if (!v.paused) window.__playedDuring = true; }, 30);
       const stop = setInterval(() => {
         if (document.getElementById("startBtn").textContent.includes("开始")) {
-          clearInterval(t); clearInterval(stop); res(window.__playedDuring);
+          clearInterval(t); clearInterval(stop); clearInterval(probe); res(window.__playedDuring);
         }
       }, 100);
-      setTimeout(() => { clearInterval(t); clearInterval(stop); res(window.__playedDuring); }, 120000);
+      setTimeout(() => {
+        clearInterval(t); clearInterval(stop); clearInterval(probe); res(window.__playedDuring);
+      }, 120000);
     }));
     const played = await watcher;
     const seeks = await page.evaluate(() => window.__seeks.slice());
+    const sawPixels = await page.evaluate(() => window.__sawPixels === true);
     // 关掉可能弹出的报告，回到可再次分析的状态
     await page.evaluate(() => {
       const m = document.getElementById("summaryModal");
       if (!m.classList.contains("hidden")) document.getElementById("closeSummary").click();
     });
-    return { played, seeks };
+    return { played, seeks, sawPixels };
   };
 
   const a = await runOnce();
   const b = await runOnce();
 
   check("分析期间视频不播放（一播放就又回到「抽到哪帧看运气」）", !a.played && !b.played);
+  check("分析期间画面不是黑的（iOS 上暂停+seek 的 video 不合成，帧要自己画）",
+    a.sawPixels && b.sawPixels, `第一遍 ${a.sawPixels} / 第二遍 ${b.sawPixels}`);
   check("两次走过的帧时刻完全一致",
     a.seeks.length > 5 && a.seeks.length === b.seeks.length &&
     a.seeks.every((x, i) => x === b.seeks[i]),
     `第一遍 ${a.seeks.length} 帧 / 第二遍 ${b.seeks.length} 帧，前 5 个：${a.seeks.slice(0, 5).join(" ")} vs ${b.seeks.slice(0, 5).join(" ")}`);
   const step = a.seeks.length > 2 ? +(a.seeks[2] - a.seeks[1]).toFixed(4) : 0;
-  check("采样步长是固定的 1/15s", Math.abs(step - 1 / 15) < 1e-3, `${step}s`);
+  check("采样步长固定（与 frameGrid 的 FILE_SAMPLE_FPS 一致）",
+    Math.abs(step - 1 / 12) < 1e-3, `${step}s ≈ 1/12s`);
   check("页面零报错", errors.length === 0, errors.join(" | "));
 } catch (err) {
   console.error("[FAIL] ", String(err).split("\n")[0]);

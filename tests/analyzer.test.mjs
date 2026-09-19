@@ -149,3 +149,25 @@ test("单帧髋部跳变（裙装遮挡/运动模糊）：不能当场收束", (
   const r3 = drive(a, SWING.slice(3), r2.t);
   assert.ok(swingOf(a, r3.summary), "跳变帧之后这一杆应当照常走完并出报告");
 });
+
+test("12fps 采样下仍能识别完整挥杆（上传视频的采样率下限）", () => {
+  // 上传视频走固定网格采样（js/frameGrid.js）。采样率是准确度与耗时的折中，
+  // 调低会直接影响识别——这条守住下限：12fps 时快速下杆仍能采到 3 帧。
+  const a = fresh();
+  const STEP = 1000 / 12;
+  let t = 0, summary = null;
+  for (const s of SWING) {
+    const n = Math.max(1, Math.round(s.ms / STEP));
+    for (let i = 0; i < n; i++) {
+      const k = n === 1 ? 1 : i / (n - 1);
+      t += STEP;
+      const out = a.update(
+        makeLms({ handsY: s.handsY[0] + (s.handsY[1] - s.handsY[0]) * k }), t
+      );
+      if (out.summary) summary = out.summary;
+    }
+  }
+  const s = swingOf(a, summary);
+  assert.ok(s, "12fps 下必须仍能识别出这一杆");
+  assert.ok(s.score > 0);
+});

@@ -433,9 +433,9 @@ function resetPerSwing() {
  *  - 相机模式：rAF 实时循环，时间基准是墙钟（现场只能如此）；
  *  - 上传视频：确定性逐帧推进，时间基准是【视频时间轴】。
  *  tMs 必须单调递增。 */
-function processFrame(lms, tMs) {
+function processFrame(lms, tMs, bg = null) {
   const mirrored = state.source === "camera" && state.facing === "user";
-  detector.draw(ctx, lms, mirrored);
+  detector.draw(ctx, lms, mirrored, bg);
   const { phase, liveFaults, summary } = analyzer.update(lms, tMs);
   renderPhase(phase);
   renderLiveFaults(liveFaults, phase, lms);
@@ -581,8 +581,14 @@ async function runFileAnalysis() {
     // 时间基准用【网格时刻】而不是 video.currentTime：seek 会落到最近的
     // 可解码帧，用实际落点会把机器差异重新引回来
     const lms = detector.detectAt(video, t * 1000);
-    processFrame(lms, t * 1000);
-    $("fpsLabel").textContent = Math.round(((i + 1) / grid.length) * 100) + "%";
+    // detectAt 里已经把这一帧缩进工作画布，直接复用它当底图：
+    // iOS 上"暂停 + seek"的 video 不往屏幕合成，不自己画就是一片黑
+    processFrame(lms, t * 1000, detector.work);
+    const pct = Math.round(((i + 1) / grid.length) * 100);
+    $("fpsLabel").textContent = pct + "%";
+    // 相位药丸在文件模式下显示进度：IDLE 的文案是"请站好位置"，
+    // 对着一段已经拍好的视频说这个毫无意义
+    $("phasePill").textContent = `分析中 ${pct}%`;
     await nextPaint();
   }
   if (state.running) concludeFileAnalysis();
@@ -732,7 +738,10 @@ function stopAnalysis() {
 
 function renderPhase(phase) {
   const pill = $("phasePill");
-  pill.textContent = PHASE_LABEL[phase] || "—";
+  // 文件逐帧分析时这里显示进度，别被相位文案覆盖掉
+  if (!(state.source === "file" && state.running)) {
+    pill.textContent = PHASE_LABEL[phase] || "—";
+  }
   pill.classList.toggle("active", phase !== PHASE.IDLE);
   // 实时模式等待入镜时显示站位引导框
   $("guideFrame").classList.toggle(
