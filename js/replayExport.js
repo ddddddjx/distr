@@ -9,12 +9,32 @@
 // 代价：耗时 = 片段时长 ÷ 倍速（2 秒的挥杆约 5 秒）。拿不到能力时由调用方
 // 降级为保存原速片段，并如实告诉用户。
 
-/** 品牌水印（画在每帧右上角）：绿点 + JAYKAY Golf，与顶栏/分享卡一致。
- *  半透明胶囊底衬保证在草地、白鞋、天空任何背景上都读得清。 */
-export function drawWatermark(ctx, w, h) {
-  const fs = Math.max(11, Math.round(w * 0.038));
-  const pad = Math.round(fs * 0.55);
-  const dot = Math.round(fs * 0.3);
+const LOGO_URL = "assets/logo-mark.png";
+let logoPromise = null;
+
+/** 载入品牌图标（同源，不会污染 canvas——被污染的 canvas 是录不出流的）。
+ *  取不到就返回 null，水印退回绿点版本，绝不因为一张图让导出失败。 */
+export function loadLogo(url = LOGO_URL) {
+  if (!logoPromise) {
+    logoPromise = new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      setTimeout(() => resolve(null), 5000);
+      img.src = url;
+    });
+  }
+  return logoPromise;
+}
+
+/** 品牌水印（画在每帧右上角）：logo + JAYKAY Golf 文字，与顶栏/分享卡一致。
+ *  半透明胶囊底衬保证在草地、白鞋、天空任何背景上都读得清。
+ *  logo 缺省时退回一枚绿点（与旧行为一致）。 */
+export function drawWatermark(ctx, w, h, logo = null) {
+  const fs = Math.max(11, Math.round(w * 0.034));
+  const pad = Math.round(fs * 0.5);
+  // logo 要比原来那枚绿点大得多：圆标里还有小鸟和字，太小就糊成一团
+  const dot = Math.round(logo ? fs * 1.15 : fs * 0.3);
   const gap = Math.round(fs * 0.45);
   ctx.save();
   ctx.font = `600 ${fs}px -apple-system, "PingFang SC", sans-serif`;
@@ -22,7 +42,7 @@ export function drawWatermark(ctx, w, h) {
   ctx.textAlign = "left";
   const textW = ctx.measureText("JAYKAY Golf").width;
   const boxW = pad * 2 + dot * 2 + gap + textW;
-  const boxH = Math.round(fs * 1.9);
+  const boxH = Math.round(logo ? dot * 2 + pad * 1.1 : fs * 1.9);
   const x = w - boxW - Math.round(w * 0.025);
   const y = Math.round(h * 0.025);
   const r = boxH / 2;
@@ -36,10 +56,14 @@ export function drawWatermark(ctx, w, h) {
   ctx.fillStyle = "rgba(0,0,0,0.42)";
   ctx.fill();
   const cy = y + boxH / 2;
-  ctx.beginPath();
-  ctx.arc(x + pad + dot, cy, dot, 0, Math.PI * 2);
-  ctx.fillStyle = "#30d158";
-  ctx.fill();
+  if (logo) {
+    ctx.drawImage(logo, x + pad, cy - dot, dot * 2, dot * 2);
+  } else {
+    ctx.beginPath();
+    ctx.arc(x + pad + dot, cy, dot, 0, Math.PI * 2);
+    ctx.fillStyle = "#30d158";
+    ctx.fill();
+  }
   ctx.fillStyle = "rgba(255,255,255,0.95)";
   ctx.fillText("JAYKAY Golf", x + pad + dot * 2 + gap, cy + 1);
   ctx.restore();
@@ -120,6 +144,8 @@ export async function renderSlowMotion(video, opts = {}) {
   canvas.width = Math.round(vw * scale);
   canvas.height = Math.round(vh * scale);
   const ctx = canvas.getContext("2d");
+  // 开录前就把 logo 备好：逐帧再去等图会让第一批帧没有水印
+  const logo = watermark ? await loadLogo() : null;
 
   const stream = canvas.captureStream(30);
   const mime = pickMime((t) => MediaRecorder.isTypeSupported(t));
@@ -157,7 +183,7 @@ export async function renderSlowMotion(video, opts = {}) {
   const pump = () => {
     if (finished) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    if (watermark) drawWatermark(ctx, canvas.width, canvas.height);
+    if (watermark) drawWatermark(ctx, canvas.width, canvas.height, logo);
     if (onProgress && span > 0) {
       const now = performance.now();
       if (now - lastReport > 100) {   // 限流：逐帧改 DOM 文案没必要

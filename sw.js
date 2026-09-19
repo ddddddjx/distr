@@ -19,6 +19,7 @@ const SHELL_FILES = [
   "js/strikeAudio.js", "js/imuReport.js", "js/cameraWatchdog.js",
   "js/replayExport.js",
   "assets/icon-192.png", "assets/icon-512.png", "assets/apple-touch-icon.png",
+  "assets/logo-mark.png",
   "assets/qr.png",
 ];
 
