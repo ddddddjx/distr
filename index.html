@@ -2,8 +2,13 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <!-- viewport-fit=cover 是 env(safe-area-inset-*) 生效的前提：缺了它，样式里
+       所有安全区 padding 都恒为 0px，顶栏会顶到刘海下、底栏被 home indicator 压住。
+       不禁用缩放：user-scalable=no / maximum-scale=1 是无障碍缺陷（本页没有输入框，
+       不存在 iOS 聚焦输入自动放大的问题，本来也没有禁用的理由）。 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0d1b12" />
+  <meta name="color-scheme" content="dark" />
   <!-- 标题保持极简：iOS「添加到主屏幕」在不采用 apple-mobile-web-app-title 时
        会退回 <title>，带副标题就会变成一长串让用户手动改名。描述信息挪到
        meta description，分享链接的预览摘要不受影响。 -->
@@ -26,6 +31,7 @@
       <div class="status-pill" id="phasePill">未开始</div>
       <button id="statsBtn" class="icon-btn" title="练习统计">📊</button>
       <button id="voiceBtn" class="icon-btn" title="语音指导开关">🔊</button>
+      <button id="soundBtn" class="icon-btn pill-btn hidden" title="视频原声开关">原声</button>
       <div class="fps" id="fpsLabel"></div>
     </header>
 

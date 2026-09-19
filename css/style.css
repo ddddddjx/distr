@@ -58,9 +58,22 @@
   /* ---- 动效：iOS 弹簧曲线 ---- */
   --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-std: cubic-bezier(0.25, 0.1, 0.25, 1);
+  /* 进场/离场与按压反馈统一用强 ease-out：起步快，手感"跟手"。
+     内置 ease（即上面的 --ease-std）起步偏慢，同样 200ms 会显得肉。 */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+/* 可点元素的平台层基线：
+   touch-action: manipulation —— 告诉浏览器这里不会双击缩放，click 立即触发，
+     否则 iOS 上会等 ~300ms 判断双击，点起来"慢半拍"；
+   user-select: none —— 长按按钮不再选中文字/弹复制菜单（原生控件不会这样）。
+     只给控件，绝不给 body：报告正文、错误信息用户要能复制。 */
+button, a, [role="button"], summary, .swing-tab, .chip {
+  touch-action: manipulation;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
 
 html, body {
   height: 100%;
@@ -70,6 +83,7 @@ html, body {
   font-size: var(--fs-body);
   overflow: hidden;
   overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%; /* 横屏不要把字体自动放大 */
   -webkit-font-smoothing: antialiased;
 }
 
@@ -96,7 +110,9 @@ button { font-family: var(--font); }
 #topbar {
   position: absolute; top: 0; left: 0; right: 0; z-index: 10;
   display: flex; align-items: center; gap: var(--sp-2);
-  padding: calc(10px + env(safe-area-inset-top)) var(--sp-4) 10px;
+  padding: calc(10px + env(safe-area-inset-top))
+           calc(var(--sp-4) + env(safe-area-inset-right)) 10px
+           calc(var(--sp-4) + env(safe-area-inset-left));
   background: var(--material-regular);
   -webkit-backdrop-filter: var(--blur);
   backdrop-filter: var(--blur);
@@ -118,7 +134,7 @@ button { font-family: var(--font); }
   background: var(--fill-3);
   color: var(--label-2);
   font-size: var(--fs-footnote); font-weight: 500;
-  transition: all 0.25s var(--ease-std);
+  transition: background 0.25s var(--ease-out), color 0.25s var(--ease-out);
 }
 .status-pill.active { background: var(--green); color: #000; font-weight: 600; }
 .icon-btn {
@@ -126,10 +142,16 @@ button { font-family: var(--font); }
   width: 32px; height: 32px; border-radius: 50%;
   font-size: 15px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
-  cursor: pointer; transition: opacity 0.2s var(--ease-std);
+  cursor: pointer; transition: opacity 0.15s var(--ease-out), transform 0.12s var(--ease-out);
 }
-.icon-btn:active { opacity: 0.6; }
+.icon-btn:active { opacity: 0.6; transform: scale(0.92); }
 .icon-btn.off { opacity: 0.4; }
+/* 文字型药丸按钮：顶栏已有一个 🔊（语音指导），视频原声再放个喇叭图标
+   必然混淆，所以直接写字。只在上传视频模式出现。 */
+.icon-btn.pill-btn {
+  width: auto; height: 26px; padding: 0 10px; border-radius: 13px;
+  font-size: var(--fs-caption2); letter-spacing: -0.2px; white-space: nowrap;
+}
 .fps {
   font-size: var(--fs-caption2); font-variant-numeric: tabular-nums;
   color: var(--label-3); min-width: 44px; text-align: right;
@@ -214,7 +236,10 @@ button { font-family: var(--font); }
 /* ============ 底部控制区（Toolbar 材质） ============ */
 #controls {
   position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
-  padding: var(--sp-3) var(--sp-4) calc(var(--sp-3) + env(safe-area-inset-bottom));
+  padding: var(--sp-3)
+           calc(var(--sp-4) + env(safe-area-inset-right))
+           calc(var(--sp-3) + env(safe-area-inset-bottom))
+           calc(var(--sp-4) + env(safe-area-inset-left));
   background: var(--material-regular);
   -webkit-backdrop-filter: var(--blur);
   backdrop-filter: var(--blur);
@@ -235,8 +260,11 @@ button { font-family: var(--font); }
   flex: 1; border: 0; background: transparent;
   color: var(--label); font-size: var(--fs-footnote); font-weight: 500;
   padding: 7px 4px; border-radius: 7px; cursor: pointer;
-  transition: all 0.2s var(--ease-std);
+  transition: background 0.2s var(--ease-out), color 0.2s var(--ease-out),
+              transform 0.12s var(--ease-out);
 }
+/* 按压反馈：分段控件原来点下去毫无反应 */
+.seg button:active { transform: scale(0.96); }
 .seg button.active {
   background: var(--seg-selected);
   font-weight: 600;
@@ -249,7 +277,7 @@ button.primary, button.ghost {
   padding: 15px; min-height: 50px;
   font-size: var(--fs-headline); font-weight: 600; letter-spacing: -0.4px;
   cursor: pointer;
-  transition: transform 0.15s var(--ease-std), opacity 0.2s var(--ease-std);
+  transition: transform 0.15s var(--ease-out), opacity 0.2s var(--ease-out);
 }
 button.primary:active, button.ghost:active { transform: scale(0.97); opacity: 0.75; }
 button.primary { background: var(--green); color: #fff; }
@@ -260,7 +288,9 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
   color: var(--label-3); font-size: var(--fs-caption);
   text-decoration: underline;
   cursor: pointer; margin-top: var(--sp-1);
+  transition: opacity 0.12s var(--ease-out);
 }
+.link-btn:active { opacity: 0.6; }
 
 /* ============ 模态：iOS Sheet（底部滑入 + 抓手） ============ */
 .modal {
@@ -331,8 +361,10 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
   padding: 7px 12px; border-radius: 999px;
   background: var(--fill-3); color: var(--label-2);
   font-size: var(--fs-footnote); font-weight: 500;
-  transition: all 0.2s var(--ease-std);
+  transition: background 0.2s var(--ease-out), color 0.2s var(--ease-out),
+              transform 0.12s var(--ease-out);
 }
+.swing-tab:active { transform: scale(0.96); }
 .swing-tab .st-score {
   margin-left: 5px; font-weight: 700; font-variant-numeric: tabular-nums;
   color: var(--label-3);
@@ -421,7 +453,11 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
 .si-drills { margin: 2px 0 0 18px; padding: 0; }
 .si-drills li { margin-bottom: var(--sp-1); }
 .si-more { margin-top: var(--sp-3); font-size: var(--fs-caption); color: var(--label-2); }
-.si-more summary { cursor: pointer; color: var(--label-3); font-weight: 500; list-style: none; }
+.si-more summary {
+  cursor: pointer; color: var(--label-3); font-weight: 500; list-style: none;
+  transition: opacity 0.12s var(--ease-out);
+}
+.si-more summary:active { opacity: 0.6; }
 .si-more summary::before { content: "› "; }
 .si-more[open] summary::before { content: "⌄ "; }
 .si-more p { margin-top: 6px; line-height: 1.6; }
@@ -609,3 +645,21 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
   font-size: 10px; color: var(--label-3);
 }
 .swing-tab.active .st-practice { color: rgba(0, 0, 0, 0.55); }
+
+/* ============ 无障碍：减弱动态效果 ============ */
+/* 系统开了「减弱动态效果」时：去掉位移/缩放与无限循环的呼吸，保留透明度与
+   颜色过渡——减弱动态不等于没有反馈，能帮助理解的变化要留着。
+   彩带是纯装饰，直接不放（JS 侧同样判断，见 celebrate()）。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.12s !important;
+    scroll-behavior: auto !important;
+  }
+  .guide-box { animation: none !important; opacity: 0.8; }
+  button.primary:active, button.ghost:active,
+  .seg button:active, .swing-tab:active { transform: none; opacity: 0.7; }
+  .icon-btn:active { transform: none; }
+  #summaryModal .modal-card, .modal.center .modal-card { animation: none !important; }
+}
