@@ -36,6 +36,7 @@
 | `js/imuReport.js` | 手腕数据区块纯渲染函数（imu 非空才渲染） |
 | `js/voice.js` / `js/shareCard.js` / `js/store.js` | 语音指导 / 分享卡生成 / 本地统计 |
 | `js/cameraWatchdog.js` | 预览卡死判定（纯函数叶子模块）：none / resume / reopen / stop |
+| `js/replayExport.js` | 慢放回放导出（叶子模块，点按钮时才动态装载）：canvas 逐帧重编码 + 系统分享/下载 |
 | `sw.js` | PWA：vendor 缓存优先（独立缓存，发布升版**不清**，否则每人重下 24MB）、外壳 install 预缓存、页面网络优先 |
 | `xhs-tool/` | 小红书小工具版（非 AI 回看训练器，容器无 WASM/无网络），独立维护 |
 
@@ -46,6 +47,14 @@
 关报告时主动 `resumePreview()`；主循环连续 1.5s 没新帧则走 `cameraWatchdog` 分级恢复
 （续播 → 重开摄像头 → 三次仍无帧就停下来告诉用户）；FPS 面板只统计真正完成推理的帧，
 预览冻住时直接显示 0，不再用 60 FPS 的假象掩盖问题（回归见 `tests/preview-stall.mjs`）。
+
+**导出慢放视频必须真的重编码**：录下来的片段是原速的，报告里的"慢动作"只是 `playbackRate = REPLAY_RATE`(0.4)
+的播放效果。直接把 blob 存给用户，他打开一看"怎么不慢了"。`renderSlowMotion()` 让回放以 0.4x 播放、
+逐帧画进 canvas，用 `captureStream() + MediaRecorder` 按墙钟录下来——文件本身就是慢速的（回归见
+`tests/replay-export.mjs`，断言产出时长 ≈ 源 ÷ 倍速）。耗时 = 片段时长 ÷ 倍速，要给等待提示。
+容器优先 mp4：iOS 存进相册只认它，webm 只能存到「文件」。拿不到 `captureStream`/`MediaRecorder`
+时降级为保存**原速**片段，并如实说明，不许假装是慢放。屏上倍速与导出倍速共用 `REPLAY_RATE` 常量，
+各写各的就会让存下来的文件和报告里看到的速度对不上。
 
 报告里的慢放回放（`#replayVideo`）**必须带 poster 兜底**：iOS 上这个第二个 video 元素常常拿不到解码资源、
 或非用户手势的自动播放被拒，既不报错也不出帧，结果就是一片纯黑。铺一张本次挥杆的真实关键帧当 poster，
@@ -82,9 +91,11 @@
 
 ## 测试
 
-- `npm run test:unit`：64 个单测（schema/export/provider/imuReport/strike/analyzer/cameraWatchdog），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
+- `npm run test:unit`：71 个单测（schema/export/provider/imuReport/strike/analyzer/cameraWatchdog/replayExport），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
 - `node tests/run-video-test.mjs <video.webm> [front|side] [playbackRate]`：Playwright E2E，真实视频回归。加 `FF=EXPORT_ENABLED` 可校验导出契约。
 - E2E 环境须知：预装 Chromium 在 `/opt/pw-browsers/`（勿 `playwright install`）；**无 H.264 解码**，iPhone 素材要转 WebM（音轨 `-c:a libvorbis`；拼接必须 `filter_complex` 全重编码，concat demuxer 会断 vorbis 时间戳）；无头推理仅 ~3fps，用 playbackRate 0.25-0.5 补偿；本地静态服务 MIME 必须含 `.mjs`。
+- `node tests/replay-export.mjs`：慢放导出重编码回归（canvas 合成素材 → `renderSlowMotion` →
+  断言产出时长约为源的 1/倍速）。需要浏览器，不进 CI 门禁。
 - `node tests/preview-stall.mjs`：实时模式预览卡死恢复回归（假摄像头启动分析 → 暂停预览元素 /
   停掉采集轨道 → 断言看门狗把画面救回来、推理继续）。需要浏览器，不进 CI 门禁。
 - `node tests/sw-offline.mjs`：Service Worker 离线启动回归。守的是线上事故——网络优先分支回退缓存未命中时

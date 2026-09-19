@@ -8,6 +8,7 @@ const DEFAULTS = {
   EXPORT_ENABLED: false,      // exportSession()：分析结果导出为 SwingSession
   SENSOR_ENABLED: false,      // 传感器线：启动时动态加载 ExternalDataProvider
   IMU_REPORT_ENABLED: false,  // 报告中的"手腕数据"扩展区块
+  REPLAY_DOWNLOAD: false,     // 报告里"保存慢放视频"：本地重编码后存到相册/文件
 };
 
 function urlOverrides() {

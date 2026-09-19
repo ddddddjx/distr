@@ -17,6 +17,7 @@ const SHELL_FILES = [
   "js/app.js", "js/swingAnalyzer.js", "js/poseDetector.js", "js/rules.js",
   "js/shareCard.js", "js/store.js", "js/voice.js", "js/flags.js",
   "js/strikeAudio.js", "js/imuReport.js", "js/cameraWatchdog.js",
+  "js/replayExport.js",
   "assets/icon-192.png", "assets/icon-512.png", "assets/apple-touch-icon.png",
   "assets/qr.png",
 ];
