@@ -87,10 +87,34 @@ try {
     const t0 = performance.now();
     const out = await ex.renderSlowMotion(v, { rate: 0.4, start: 0, end: 0, maxW: 320 });
     const wall = (performance.now() - t0) / 1000;
+
+    // 上传视频模式：只导出这一杆的区间（相机模式是整段），所以区间必须也对
+    const segStart = srcDur * 0.25, segEnd = srcDur * 0.75;
+    const seg = await ex.renderSlowMotion(v, {
+      rate: 0.4, start: segStart, end: segEnd, maxW: 320,
+    });
+    const segDur = await durationOf(seg);
+
+    // iOS 上 await import() 之后用户手势可能失效 → play() 被拒。
+    // 必须立刻报错收尾，不能挂到 timeoutMs（那是 60 秒的白转圈）
+    const v2 = document.createElement("video");
+    v2.muted = true; v2.playsInline = true; v2.src = URL.createObjectURL(srcBlob);
+    document.body.appendChild(v2);
+    await new Promise((res) => { v2.onloadeddata = res; setTimeout(res, 5000); });
+    v2.play = () => Promise.reject(new DOMException("blocked", "NotAllowedError"));
+    const t1 = performance.now();
+    let rejected = false;
+    try {
+      await ex.renderSlowMotion(v2, { rate: 0.4, start: 0, end: 0, maxW: 320, timeoutMs: 60000 });
+    } catch { rejected = true; }
+    const rejectWall = (performance.now() - t1) / 1000;
+
     return {
       srcDur, outDur: await durationOf(out), outSize: out.size,
       outType: out.type, wall,
       name: ex.exportFileName(92, out.type),
+      segSpan: segEnd - segStart, segDur, segSize: seg.size,
+      rejected, rejectWall,
     };
   }, base);
 
@@ -100,7 +124,14 @@ try {
   console.error(`[${slower ? "ok" : "FAIL"}] 导出的文件本身就是慢速的（不是原速片段）`);
   console.error(`[${r.outSize > 1000 ? "ok" : "FAIL"}] 产出非空：${r.outSize} 字节，${r.outType}`);
   console.error(`[ok] 文件名 ${r.name}`);
-  ok = slower && r.outSize > 1000;
+  const segRatio = r.segDur / r.segSpan;
+  const segOk = segRatio > 1.8 && segRatio < 3.2 && r.segSize > 1000;
+  console.error(`[${segOk ? "ok" : "FAIL"}] 区间导出（上传视频模式）：源区间 ${r.segSpan.toFixed(2)}s → 导出 ${r.segDur.toFixed(2)}s（${segRatio.toFixed(2)}×）`);
+
+  const failFast = r.rejected && r.rejectWall < 5;
+  console.error(`[${failFast ? "ok" : "FAIL"}] play() 被拒时立刻报错收尾（${r.rejectWall.toFixed(1)}s），不会白转圈到超时`);
+
+  ok = slower && r.outSize > 1000 && segOk && failFast;
 } catch (err) {
   console.error("[FAIL] ", String(err).split("\n")[0]);
 } finally {

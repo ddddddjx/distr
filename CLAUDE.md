@@ -11,7 +11,7 @@
 2. **纯前端**：Vanilla JS ES Modules，零构建、零运行时依赖、无服务端。部署 = 静态文件。
 3. 模型等资产全部自托管在 `vendor/`（~24MB），因为 Google CDN 在中国不可达。
 4. 与 PGA/TPI 无官方关联，界面保留免责声明；不得克隆真人声音（声音肖像权）。
-5. 中文注释、英文标识符；新功能一律放在默认关闭的 feature flag 后（`js/flags.js`，URL `?ff=X,Y` 或 localStorage `ff.X` 开启）。
+5. 中文注释、英文标识符；新功能一律放在默认关闭的 feature flag 后（`js/flags.js`，URL `?ff=X,Y` 或 localStorage `ff.X` 开启）。验收通过后可把默认值翻成 true（如 `REPLAY_DOWNLOAD`），localStorage `ff.X=0` 仍可关掉。
 6. user_id 只能是设备级匿名 UUID 或 null。
 
 ## 两条产品线与解耦契约
@@ -52,6 +52,9 @@
 的播放效果。直接把 blob 存给用户，他打开一看"怎么不慢了"。`renderSlowMotion()` 让回放以 0.4x 播放、
 逐帧画进 canvas，用 `captureStream() + MediaRecorder` 按墙钟录下来——文件本身就是慢速的（回归见
 `tests/replay-export.mjs`，断言产出时长 ≈ 源 ÷ 倍速）。耗时 = 片段时长 ÷ 倍速，要给等待提示。
+实时模式导出整段录像，上传视频模式导出本杆的 `replaySegment` 区间，两条路径都覆盖。
+`await import()` 之后 iOS 的用户手势可能已失效导致 `play()` 被拒——必须就地 finish() 并抛错，
+否则录制器挂到 60s 超时、`done` 无人接手变成未捕获拒绝，用户对着白转圈等一分钟。
 容器优先 mp4：iOS 存进相册只认它，webm 只能存到「文件」。拿不到 `captureStream`/`MediaRecorder`
 时降级为保存**原速**片段，并如实说明，不许假装是慢放。屏上倍速与导出倍速共用 `REPLAY_RATE` 常量，
 各写各的就会让存下来的文件和报告里看到的速度对不上。
