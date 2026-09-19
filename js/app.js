@@ -47,6 +47,13 @@ function newAnalyzer() {
   });
 }
 
+// 推理图被污染（时间戳倒退等）后无法自愈，只能重开页面。宁可明说，
+// 也不要让用户对着一个"有画面、没结果"的 App 反复挥杆
+detector.onBroken = () => {
+  showHint("推理引擎出错，已停止分析。请刷新页面重试", 12000);
+  if (state.running) stopAnalysis();
+};
+
 let analyzer = newAnalyzer();
 // 每次挥杆中各问题首次出现瞬间的截图（报告中展示）
 const snapshots = new Map();
@@ -311,6 +318,8 @@ async function exitFileMode() {
  * 然后报告最后一次挥杆——试挥/热身在前，正式击球几乎总是最后一挥。
  */
 async function concludeFileAnalysis() {
+  // 相机模式要靠 VIDEO 模式的跟踪，分析一结束就切回去
+  detector.setStateless(false);
   replaySegment.end = video.currentTime || video.duration || 0;
   const tail = analyzer.finalize();
   if (tail) videoSwings.push(packSwing(tail));
@@ -677,6 +686,9 @@ async function startAnalysis() {
     await detector.prime(video);
     // 预热用的是 performance.now()，视频时间轴从 0 起——必须先接好时间戳游标
     detector.beginTimeline();
+    // 关键：切到无状态推理。VIDEO 模式的跟踪状态会跨"两次分析"残留，
+    // 第二次从头分析时开头几帧就偏、基准锁错——只统一帧序列是不够的
+    await detector.setStateless(true);
     const secs = estimateAnalysisSeconds(Number.isFinite(video.duration) ? video.duration : 0);
     showHint(
       `正在逐帧分析（约 ${secs} 秒）：同一段视频每次结果都一样，请别离开本页`,
@@ -700,6 +712,7 @@ async function startAnalysis() {
 function stopAnalysis() {
   if (!state.running) return;
   state.running = false;
+  detector.setStateless(false); // 逐帧分析可能中途停下，模式要还原
   coach.stop();
   discardRecorder();
   cancelAnimationFrame(state.rafId);
