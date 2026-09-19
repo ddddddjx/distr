@@ -113,7 +113,16 @@ export async function renderSlowMotion(video, opts = {}) {
   }
   video.playbackRate = rate;
   rec.start();
-  await video.play();
+  try {
+    await video.play();
+  } catch (err) {
+    // iOS 上 await import() 之后用户手势可能已经失效，play() 会被拒。
+    // 必须就地收尾：否则录制器和 rAF 会一直挂到 timeoutMs，done 也没人接，
+    // 变成一条未捕获的 Promise 拒绝。
+    finish();
+    done.catch(() => {});
+    throw new Error("浏览器拒绝播放回放，无法生成慢放视频");
+  }
   pump();
   return done;
 }
