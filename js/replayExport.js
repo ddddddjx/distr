@@ -9,6 +9,60 @@
 // 代价：耗时 = 片段时长 ÷ 倍速（2 秒的挥杆约 5 秒）。拿不到能力时由调用方
 // 降级为保存原速片段，并如实告诉用户。
 
+/** 品牌水印（画在每帧右上角）：绿点 + JAYKAY Golf，与顶栏/分享卡一致。
+ *  半透明胶囊底衬保证在草地、白鞋、天空任何背景上都读得清。 */
+export function drawWatermark(ctx, w, h) {
+  const fs = Math.max(11, Math.round(w * 0.038));
+  const pad = Math.round(fs * 0.55);
+  const dot = Math.round(fs * 0.3);
+  const gap = Math.round(fs * 0.45);
+  ctx.save();
+  ctx.font = `600 ${fs}px -apple-system, "PingFang SC", sans-serif`;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  const textW = ctx.measureText("JAYKAY Golf").width;
+  const boxW = pad * 2 + dot * 2 + gap + textW;
+  const boxH = Math.round(fs * 1.9);
+  const x = w - boxW - Math.round(w * 0.025);
+  const y = Math.round(h * 0.025);
+  const r = boxH / 2;
+  ctx.beginPath();           // 圆角胶囊（roundRect 在旧 Safari 上没有，手画）
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + boxW, y, x + boxW, y + boxH, r);
+  ctx.arcTo(x + boxW, y + boxH, x, y + boxH, r);
+  ctx.arcTo(x, y + boxH, x, y, r);
+  ctx.arcTo(x, y, x + boxW, y, r);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(0,0,0,0.42)";
+  ctx.fill();
+  const cy = y + boxH / 2;
+  ctx.beginPath();
+  ctx.arc(x + pad + dot, cy, dot, 0, Math.PI * 2);
+  ctx.fillStyle = "#30d158";
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.fillText("JAYKAY Golf", x + pad + dot * 2 + gap, cy + 1);
+  ctx.restore();
+}
+
+/** 取到可用的时长。MediaRecorder 产出的 blob 常年 duration=Infinity，
+ *  要靠"seek 到极大值再读 currentTime"问出来——没有它就既算不出进度
+ *  也算不出等待时长（相机模式下只能硬编一个"约 5 秒"）。 */
+export async function resolveDuration(video) {
+  if (Number.isFinite(video.duration) && video.duration > 0) return video.duration;
+  const back = video.currentTime;
+  await new Promise((res) => {
+    const done = () => { video.removeEventListener("timeupdate", done); res(); };
+    video.addEventListener("timeupdate", done);
+    video.addEventListener("seeked", done, { once: true });
+    setTimeout(done, 1500);
+    try { video.currentTime = 1e6; } catch { done(); }
+  });
+  const d = Number.isFinite(video.duration) ? video.duration : video.currentTime;
+  try { video.currentTime = back; } catch { /* 回不去就算了，后面还会 seek 到 start */ }
+  return d > 0 ? d : 0;
+}
+
 /** 录制容器优先级：mp4 排第一，iOS 存进相册只认它；webm 只能存到「文件」 */
 const MIME_CANDIDATES = ["video/mp4", "video/webm;codecs=vp9", "video/webm"];
 
@@ -55,7 +109,10 @@ export function estimateSeconds(start, end, rate) {
  * @returns {Promise<Blob>}
  */
 export async function renderSlowMotion(video, opts = {}) {
-  const { rate = 0.4, start = 0, end = 0, maxW = 720, timeoutMs = 60000 } = opts;
+  const {
+    rate = 0.4, start = 0, end = 0, maxW = 720, timeoutMs = 60000,
+    onProgress = null, watermark = true,
+  } = opts;
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || !vh) throw new Error("回放还没准备好");
   const scale = Math.min(1, maxW / vw);
@@ -70,7 +127,9 @@ export async function renderSlowMotion(video, opts = {}) {
   const chunks = [];
   rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
 
-  const stopAt = end > start ? end : Infinity; // end 缺省 = 放到片尾
+  // end 缺省（相机模式导出整段）时问出真实时长，好让进度与预估都有分母
+  const stopAt = end > start ? end : (await resolveDuration(video)) || Infinity;
+  const span = Number.isFinite(stopAt) ? stopAt - start : 0;
   let rafId = 0, timer = 0;
   const done = new Promise((resolve, reject) => {
     rec.onstop = () => {
@@ -94,9 +153,18 @@ export async function renderSlowMotion(video, opts = {}) {
   };
 
   // 逐帧搬运：源以 rate 倍速播放，这里按墙钟时间画，录出来的就是慢速文件
+  let lastReport = 0;
   const pump = () => {
     if (finished) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    if (watermark) drawWatermark(ctx, canvas.width, canvas.height);
+    if (onProgress && span > 0) {
+      const now = performance.now();
+      if (now - lastReport > 100) {   // 限流：逐帧改 DOM 文案没必要
+        lastReport = now;
+        onProgress(Math.min(1, Math.max(0, (video.currentTime - start) / span)));
+      }
+    }
     if (video.currentTime >= stopAt || video.ended) return void finish();
     rafId = requestAnimationFrame(pump);
   };
@@ -124,17 +192,21 @@ export async function renderSlowMotion(video, opts = {}) {
     throw new Error("浏览器拒绝播放回放，无法生成慢放视频");
   }
   pump();
-  return done;
+  const blob = await done;
+  onProgress?.(1);
+  return blob;
 }
 
 /**
  * 把视频 blob 交给用户保存。iOS 上优先系统分享（能存相册/文件），
  * 否则退回 <a download>。
+ * forceDownload=true 时跳过分享直接下载（分享被系统拒绝后的兜底）。
  * @returns {Promise<"shared"|"downloaded">}
  */
-export async function saveVideoBlob(blob, filename, title = "JAYKAY Golf 慢放回放") {
+export async function saveVideoBlob(blob, filename, opts = {}) {
+  const { title = "JAYKAY Golf 慢放回放", forceDownload = false } = opts;
   const file = new File([blob], filename, { type: blob.type || "video/mp4" });
-  if (navigator.canShare?.({ files: [file] })) {
+  if (!forceDownload && navigator.canShare?.({ files: [file] })) {
     await navigator.share({ files: [file], title });
     return "shared";
   }

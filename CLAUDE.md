@@ -55,7 +55,16 @@
 实时模式导出整段录像，上传视频模式导出本杆的 `replaySegment` 区间，两条路径都覆盖。
 `await import()` 之后 iOS 的用户手势可能已失效导致 `play()` 被拒——必须就地 finish() 并抛错，
 否则录制器挂到 60s 超时、`done` 无人接手变成未捕获拒绝，用户对着白转圈等一分钟。
-容器优先 mp4：iOS 存进相册只认它，webm 只能存到「文件」。拿不到 `captureStream`/`MediaRecorder`
+**保存必须拆成两步**：`navigator.share()` 在 iOS 上只接受【用户手势直接触发】的调用，
+而转码要跑好几秒，手势早已过期 → `share()` 抛 `NotAllowedError`，面板根本不弹。
+旧实现还把 `NotAllowedError` 当"用户取消"吞掉，用户既没看到面板也没看到报错，
+以为存进相册了其实什么都没发生。所以：第一步转码（按钮上跑实时百分比 + 剩余秒数，
+`onProgress` 限流 100ms），第二步把按钮变成"存到相册 · 点此完成"，用户那一下点击
+就是新鲜手势，面板必定弹出。`AbortError`（用户自己取消）留在第二步等他再点；
+其他失败退回 `forceDownload`，两条路都不通就如实报错，**绝不显示"已保存"**。
+网页没有任何 API 能直接写相册——只能靠这张面板，文案要说清"选「存储视频」"。
+导出帧右上角画品牌水印（`drawWatermark`，绿点 + JAYKAY Golf + 半透明胶囊底衬，
+纯白背景上也读得清）。容器优先 mp4：iOS 存进相册只认它，webm 只能存到「文件」。拿不到 `captureStream`/`MediaRecorder`
 时降级为保存**原速**片段，并如实说明，不许假装是慢放。屏上倍速与导出倍速共用 `REPLAY_RATE` 常量，
 各写各的就会让存下来的文件和报告里看到的速度对不上。
 
@@ -97,8 +106,9 @@
 - `npm run test:unit`：71 个单测（schema/export/provider/imuReport/strike/analyzer/cameraWatchdog/replayExport），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
 - `node tests/run-video-test.mjs <video.webm> [front|side] [playbackRate]`：Playwright E2E，真实视频回归。加 `FF=EXPORT_ENABLED` 可校验导出契约。
 - E2E 环境须知：预装 Chromium 在 `/opt/pw-browsers/`（勿 `playwright install`）；**无 H.264 解码**，iPhone 素材要转 WebM（音轨 `-c:a libvorbis`；拼接必须 `filter_complex` 全重编码，concat demuxer 会断 vorbis 时间戳）；无头推理仅 ~3fps，用 playbackRate 0.25-0.5 补偿；本地静态服务 MIME 必须含 `.mjs`。
-- `node tests/replay-export.mjs`：慢放导出重编码回归（canvas 合成素材 → `renderSlowMotion` →
-  断言产出时长约为源的 1/倍速）。需要浏览器，不进 CI 门禁。
+- `node tests/replay-export.mjs`：慢放导出回归（canvas 合成素材 → `renderSlowMotion`）。断言：
+  产出时长 ≈ 源 ÷ 倍速、区间导出（上传视频模式）同样成立、右上角水印把画面压暗、
+  进度回调单调递增且收尾 100%、`play()` 被拒时秒级报错不挂到超时。需要浏览器，不进 CI 门禁。
 - `node tests/preview-stall.mjs`：实时模式预览卡死恢复回归（假摄像头启动分析 → 暂停预览元素 /
   停掉采集轨道 → 断言看门狗把画面救回来、推理继续）。需要浏览器，不进 CI 门禁。
 - `node tests/sw-offline.mjs`：Service Worker 离线启动回归。守的是线上事故——网络优先分支回退缓存未命中时
