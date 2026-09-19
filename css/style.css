@@ -48,6 +48,22 @@
   --fs-caption: 12px;
   --fs-caption2: 11px;
 
+  /* ---- 字距（tracking）：随字号变化，绝不一个值通吃 ----
+     字越大，字母间的视觉间隙越显宽，要收紧；小字反过来要微微放开才好认。
+     这正是 SF 自带 tracking 表的形状，网页上得自己补。 */
+  --tr-display: -0.022em;   /* 40px+ 大数字/大标题 */
+  --tr-title: -0.02em;      /* 20–28px */
+  --tr-headline: -0.015em;  /* 17px 强调 */
+  --tr-body: 0;             /* 正文不动 */
+  --tr-small: 0.01em;       /* ≤12px 小字微放 */
+  --tr-caps: 0.05em;        /* 全大写小标签：必须放开，否则糊成一团 */
+
+  /* ---- 行距（leading）：与字号反向 —— 大标题收紧，正文放松 ---- */
+  --lh-display: 1.05;
+  --lh-title: 1.25;
+  --lh-body: 1.5;
+  --lh-relaxed: 1.6;
+
   /* ---- 几何：4pt 网格与连续圆角 ---- */
   --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;
   --sp-4: 16px; --sp-5: 20px; --sp-6: 24px;
@@ -81,6 +97,8 @@ html, body {
   color: var(--label);
   font-family: var(--font);
   font-size: var(--fs-body);
+  line-height: var(--lh-body);   /* 此前没设，正文靠各处零散覆盖 */
+  letter-spacing: var(--tr-body);
   overflow: hidden;
   overscroll-behavior: none;
   -webkit-text-size-adjust: 100%; /* 横屏不要把字体自动放大 */
@@ -150,7 +168,7 @@ button { font-family: var(--font); }
    必然混淆，所以直接写字。只在上传视频模式出现。 */
 .icon-btn.pill-btn {
   width: auto; height: 26px; padding: 0 10px; border-radius: 13px;
-  font-size: var(--fs-caption2); letter-spacing: -0.2px; white-space: nowrap;
+  font-size: var(--fs-caption2); letter-spacing: var(--tr-small); white-space: nowrap;
 }
 .fps {
   font-size: var(--fs-caption2); font-variant-numeric: tabular-nums;
@@ -297,7 +315,10 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
   position: fixed; inset: 0; z-index: 20;
   background: rgba(0, 0, 0, 0.48);
   display: flex; align-items: flex-end; justify-content: center;
+  /* 遮罩要和卡片一起来。原来卡片滑入、遮罩却是硬切，两者不同步很扎眼 */
+  animation: scrim-in 0.3s var(--ease-out);
 }
+@keyframes scrim-in { from { background: rgba(0, 0, 0, 0); } }
 .modal.hidden, .hidden { display: none !important; }
 .modal-card {
   width: 100%; max-width: 560px;
@@ -319,9 +340,24 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
   margin: -8px auto var(--sp-4);
 }
 @keyframes sheet-in {
-  from { transform: translateY(48px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+  /* 位移 + 极轻微放大：表面读起来像"到达"，而不是一张图被推上来。
+     绝不从 scale(0) 起——现实里没有东西从虚无中出现。 */
+  from { transform: translateY(48px) scale(0.985); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
 }
+/* 堆叠 sheet（分享卡开在报告之上、关于开在选择页之上）：
+   父层后退一档并压暗，第二层遮罩相应减轻。不这么做就是两层 0.48 的黑叠在
+   一起（≈0.73）、父卡片纹丝不动——只是"更黑了"，读不出层级关系。 */
+.modal.pushed .modal-card {
+  /* 必须掐掉入场动画：CSS 动画在层叠里会压过普通声明，父层入场还没跑完时
+     后退效果会被整个吃掉（而且一个被推到后面的层本来也不该再播入场） */
+  animation: none;
+  transform: scale(0.94) translateY(12px);
+  filter: brightness(0.7);
+  transition: transform 0.3s var(--ease-out), filter 0.3s var(--ease-out);
+}
+.modal.stacked { background: rgba(0, 0, 0, 0.24); }
+
 /* 居中变体：加载遮罩与欢迎页 */
 .modal.center { align-items: center; padding: var(--sp-5); }
 .modal.center .modal-card {
@@ -336,7 +372,8 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
   to { transform: scale(1); opacity: 1; }
 }
 .modal-card h2 {
-  font-size: var(--fs-headline); font-weight: 600; letter-spacing: -0.4px;
+  font-size: var(--fs-headline); font-weight: 600;
+  letter-spacing: var(--tr-headline); line-height: var(--lh-title);
   margin-bottom: var(--sp-3);
 }
 .modal-card .primary { width: 100%; margin-top: var(--sp-2); }
@@ -380,7 +417,8 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
   margin-bottom: var(--sp-2);
 }
 .score {
-  font-size: 46px; font-weight: 700; letter-spacing: -1px;
+  font-size: 46px; font-weight: 700;
+  letter-spacing: var(--tr-display); line-height: var(--lh-display);
   font-variant-numeric: tabular-nums;
   margin: var(--sp-1) 0 var(--sp-2);
 }
@@ -447,7 +485,7 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
 .si-block { font-size: var(--fs-footnote); color: var(--label-2); line-height: 1.6; margin-top: var(--sp-2); }
 .si-label {
   display: block; margin-bottom: 3px;
-  font-size: var(--fs-caption2); font-weight: 600; letter-spacing: 0.5px;
+  font-size: var(--fs-caption2); font-weight: 600; letter-spacing: var(--tr-caps);
   color: var(--label-3); text-transform: uppercase;
 }
 .si-drills { margin: 2px 0 0 18px; padding: 0; }
@@ -470,7 +508,7 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
   background: var(--bg-3);
   border-radius: var(--r-sm); padding: var(--sp-3) 6px;
 }
-.stat-num { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.5px; }
+.stat-num { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: var(--tr-title); line-height: var(--lh-title); }
 .stat-label { font-size: var(--fs-caption2); color: var(--label-3); margin-top: 3px; }
 .stat-diff { font-weight: 600; }
 .stat-diff.up { color: var(--green); }
@@ -482,7 +520,7 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
   border: 0.33px solid rgba(48, 209, 88, 0.35);
   border-radius: var(--r-md); padding: var(--sp-4); margin-bottom: var(--sp-3);
 }
-.focus-tag { font-size: 10px; font-weight: 700; letter-spacing: 0.6px; color: var(--green); text-transform: uppercase; margin-bottom: 6px; }
+.focus-tag { font-size: 10px; font-weight: 700; letter-spacing: var(--tr-caps); color: var(--green); text-transform: uppercase; margin-bottom: 6px; }
 .focus-title { font-size: var(--fs-headline); font-weight: 700; letter-spacing: -0.4px; }
 .focus-rate { font-size: var(--fs-caption); color: var(--label-2); margin: var(--sp-1) 0 var(--sp-2); }
 .focus-drill { font-size: var(--fs-footnote); line-height: 1.6; }
@@ -490,7 +528,7 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
 
 .stats-section-label {
   text-align: left;
-  font-size: var(--fs-caption2); font-weight: 600; letter-spacing: 0.5px;
+  font-size: var(--fs-caption2); font-weight: 600; letter-spacing: var(--tr-caps);
   color: var(--label-3); text-transform: uppercase;
   margin: var(--sp-4) 2px var(--sp-2);
 }
@@ -514,7 +552,11 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
 .stats-foot { font-size: 10.5px; color: var(--label-3); margin-top: var(--sp-3); }
 
 /* ============ 欢迎页（居中卡片） ============ */
-.chooser-brand { justify-content: center; font-size: 24px; margin-bottom: 6px; }
+/* 24px 时沿用 .brand 给 17px 调的 -0.4px 会偏松，按字号收紧 */
+.chooser-brand {
+  justify-content: center; font-size: 24px; margin-bottom: 6px;
+  letter-spacing: var(--tr-title); line-height: var(--lh-title);
+}
 .chooser-slogan { font-size: var(--fs-subhead); color: var(--label-2); margin-bottom: var(--sp-4); }
 .chips { display: flex; justify-content: center; gap: var(--sp-2); margin-bottom: var(--sp-5); flex-wrap: wrap; }
 .chip {
@@ -569,7 +611,7 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
 .voice-row .v-check { color: var(--green); font-weight: 700; }
 .voice-section-label {
   text-align: left;
-  font-size: var(--fs-caption2); font-weight: 600; letter-spacing: 0.5px;
+  font-size: var(--fs-caption2); font-weight: 600; letter-spacing: var(--tr-caps);
   color: var(--label-3); text-transform: uppercase;
   margin: var(--sp-4) 2px var(--sp-2);
 }

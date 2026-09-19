@@ -107,6 +107,53 @@ try {
   }));
   check("393px 无横向溢出", overflow.sw <= overflow.iw + 1, `${overflow.sw} ≤ ${overflow.iw}`);
   check("页面零报错", errors.length === 0, errors.join(" | "));
+  // —— 排版体系（apple-design §15）——
+  const type = await page.evaluate(() => {
+    const px = (v) => parseFloat(v);
+    const g = (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const cs = getComputedStyle(el);
+      return { fs: px(cs.fontSize), ls: px(cs.letterSpacing) || 0, lh: cs.lineHeight };
+    };
+    document.getElementById("chooser").classList.remove("hidden");
+    return { brand: g(".chooser-brand"), body: g("body"), pill: g("#soundBtn"), chip: g(".chip") };
+  });
+  // 大字号负字距、小字非负字距（一个值通吃必然有一头是错的）
+  check("大字号收紧字距（品牌 24px < 0）", type.brand.ls < 0, `${type.brand.ls}px @ ${type.brand.fs}px`);
+  check("小字不用负字距（11px 药丸 ≥ 0）", type.pill.ls >= 0, `${type.pill.ls}px @ ${type.pill.fs}px`);
+  check("正文有明确行高（不吃浏览器默认 normal）",
+    type.body.lh !== "normal" && parseFloat(type.body.lh) / type.body.fs > 1.3,
+    `${type.body.lh} / ${type.body.fs}px`);
+
+  // —— 堆叠层级 ——
+  await page.evaluate(() => {
+    document.getElementById("chooser").classList.remove("hidden");
+    document.getElementById("aboutLink").click();
+  });
+  // 等入场动画跑完再读计算样式，否则读到的是动画首帧（动画会压过普通声明）
+  await page.waitForTimeout(600);
+  const stack = await page.evaluate(() => {
+    const parent = document.getElementById("chooser");
+    const child = document.getElementById("aboutModal");
+    const pc = getComputedStyle(parent.querySelector(".modal-card"));
+    return {
+      parentPushed: parent.classList.contains("pushed"),
+      childStacked: child.classList.contains("stacked"),
+      parentTransform: pc.transform,
+      parentFilter: pc.filter,
+      childScrim: getComputedStyle(child).backgroundColor,
+      parentScrim: getComputedStyle(parent).backgroundColor,
+    };
+  });
+  const alphaOf = (c) => { const m = c.match(/rgba?\(([^)]+)\)/); return m ? parseFloat(m[1].split(",")[3] ?? "1") : 1; };
+  check("堆叠时父层后退并压暗（不是再糊一层黑）",
+    stack.parentPushed && stack.parentTransform !== "none" && stack.parentFilter !== "none",
+    `${stack.parentTransform} ${stack.parentFilter}`);
+  check("上层遮罩相应减轻（避免双重压暗）",
+    stack.childStacked && alphaOf(stack.childScrim) < alphaOf(stack.parentScrim),
+    `上层 ${alphaOf(stack.childScrim)} < 下层 ${alphaOf(stack.parentScrim)}`);
+
   await ctx.close();
 
   // —— 减弱动态效果 ——

@@ -677,6 +677,21 @@ function renderLiveFaults(keys, phase, lms) {
   box.innerHTML = chips.join("");
 }
 
+/** 打开叠在另一层之上的模态：父层后退压暗，自己用更轻的遮罩。
+ *  不这么做就是两层 0.48 的黑叠在一起，只是"更黑了"，读不出层级。 */
+function openStackedModal(id, parentId) {
+  const parent = $(parentId);
+  if (parent && !parent.classList.contains("hidden")) parent.classList.add("pushed");
+  $(id).classList.add("stacked");
+  $(id).classList.remove("hidden");
+}
+
+function closeStackedModal(id, parentId) {
+  $(id).classList.add("hidden");
+  $(id).classList.remove("stacked");
+  $(parentId)?.classList.remove("pushed");
+}
+
 let lastSummary = null; // 分享卡数据源
 
 // 注意：存历史（saveSwing）由调用方负责——报告可反复切换查看，不能重复入库
@@ -1064,7 +1079,9 @@ $("swingTabs").addEventListener("click", (e) => {
 
 function openShare(dataUrl) {
   $("shareImg").src = dataUrl;
-  $("shareModal").classList.remove("hidden");
+  // 分享卡可能开在报告之上（逐杆分享），也可能从统计面板开（周报）
+  const parent = !$("summaryModal").classList.contains("hidden") ? "summaryModal" : "statsModal";
+  openStackedModal("shareModal", parent);
 }
 
 $("shareSummaryBtn").addEventListener("click", async () => {
@@ -1089,7 +1106,8 @@ $("shareWeeklyBtn").addEventListener("click", async () => {
 });
 
 $("closeShare").addEventListener("click", () => {
-  $("shareModal").classList.add("hidden");
+  closeStackedModal("shareModal", "summaryModal");
+  $("statsModal").classList.remove("pushed"); // 周报分享卡的父层是统计面板
 });
 
 $("shareSend").addEventListener("click", async () => {
@@ -1382,11 +1400,11 @@ function renderVoiceList() {
 
 $("aboutLink").addEventListener("click", () => {
   $("aboutVer").textContent = `JAYKAY Golf v${APP_VERSION}`;
-  $("aboutModal").classList.remove("hidden");
+  openStackedModal("aboutModal", "chooser"); // 关于开在选择页之上
 });
 
 $("closeAbout").addEventListener("click", () => {
-  $("aboutModal").classList.add("hidden");
+  closeStackedModal("aboutModal", "chooser");
 });
 
 $("feedbackBtn").addEventListener("click", () => {
