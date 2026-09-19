@@ -36,6 +36,7 @@
 | `js/imuReport.js` | 手腕数据区块纯渲染函数（imu 非空才渲染） |
 | `js/voice.js` / `js/shareCard.js` / `js/store.js` | 语音指导 / 分享卡生成 / 本地统计 |
 | `js/frameGrid.js` | 上传视频的确定性采样网格（纯函数叶子模块）：同一段视频永远同一组帧 |
+| `js/scanWindows.js` | 粗扫定位「有动作且完整击到球」的区间（纯函数叶子模块）：只对该区间做推理 |
 | `js/cameraWatchdog.js` | 预览卡死判定（纯函数叶子模块）：none / resume / reopen / stop |
 | `js/replayExport.js` | 慢放回放导出（叶子模块，点按钮时才动态装载）：canvas 逐帧重编码 + 系统分享/下载 |
 | `sw.js` | PWA：vendor 缓存优先（独立缓存，发布升版**不清**，否则每人重下 24MB）、外壳 install 预缓存、页面网络优先 |
@@ -166,6 +167,33 @@ review-animations 标准。这些是"一个网页"与"一个 App"的分界线，
   证明这条测试测得到东西）、`tests/deterministic-analysis.mjs`（帧序列）与 `tests/frameGrid.test.mjs`。
   教训：上一版只断言"两次走过的帧时刻一致"，没验模型输出，这个 bug 就是这么溜过去的。
 
+## 只对「有动作且完整击到球」的区间做推理（勿回退）
+
+确定性逐帧的代价是成本：每帧推理 380–450ms（seek 只占 18ms），整段扫 20 秒素材要跑
+240 帧、一分半。可用户拍的素材里真正有用的只有击球前后那几秒——前面架机位、后面捡球都在陪跑。
+`js/scanWindows.js` + `planFileFrames()` 先廉价定位，再只对区间推理：
+
+- **第一级是击球声，不是画面**：`strikeAudio.extractImpactTimes()` 直接回答"击到球了吗"，
+  而且**一帧视频都不用碰**（纯音轨解码，本地、几百毫秒）。比任何"动作能量"粗扫都更准更便宜。
+- **第二级才是帧差粗扫**（静音素材/嘈杂被本底吃掉时）：按 6fps seek，缩到 64×36 求亮度平均
+  绝对差，只判"这一刻画面在动吗"，不做任何推理。取不到像素（跨源污染）就放弃，回退整段。
+- **两级都落空一律回退整段**：定位失败最多是慢，而漏采会让用户**拿不到报告**——后者严重得多。
+  窗口覆盖率超过 `maxCoverage`(0.7) 也直接走整段：裁一点点不值得承担漏采风险。
+- **窗口时刻必须是全局网格的子集**（`planFrames` 从 `sampleGrid` 里筛，不是在窗口内另起网格）：
+  裁剪只减少帧、不移动帧，窗口内每一帧的采样时刻与整段扫描完全一致，分数照旧可复现。
+  在窗口内重新起点会让同一段视频"整段扫"和"裁着扫"落在不同帧上，等于把不确定性又放回来。
+- **窗口要从准备姿势之前开起**：基准锁定要静止 600ms + ≥5 采样，再加约 1s 上杆——
+  `preS` 3.0s 是下限口径，开太晚基准锁不上，整杆识别不到（比慢更糟）；`postS` 2.0s 覆盖送杆到收杆。
+- **跨窗口之间要收束状态机**：窗口之间隔着被跳过的时间，接着上一段推会把两杆拼成一杆。
+  进入下一段前先 `analyzer.finalize()` 存档、再 `nextSwing()` 从干净状态开始。
+- 粗扫期间同样要自己把帧画进 overlay（`detector.draw(ctx, null, false, video)`）：
+  iOS 上"暂停 + seek"的 video 不往屏幕合成，不画就是一片黑——和逐帧推理阶段同一个坑。
+- 音轨只解一次：粗扫阶段的峰存进 `state.audioPeaks`，报告阶段的试挥判定直接复用，
+  别再花 4 秒解一遍（换素材时在 `enterFileMode` 里作废）。
+- 耗时提示要等定位完才给：在定位前就说"约 N 秒"必然是按整段算的，和实际差好几倍。
+- 回归见 `tests/scanWindows.test.mjs`（纯函数：合并/裁剪/子集性质/回退）与
+  `tests/strike-window.mjs`（E2E：带击球声的合成素材，断言区间外一帧都不推理）。
+
 ## 分析器关键设计（改动前必读）
 
 踩坑沉淀，勿轻易回退：
@@ -197,16 +225,23 @@ review-animations 标准。这些是"一个网页"与"一个 App"的分界线，
 
 ## 测试
 
-- `npm run test:unit`：77 个单测（schema/export/provider/imuReport/strike/analyzer/cameraWatchdog/replayExport/frameGrid），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
+- `npm run test:unit`：91 个单测（schema/export/provider/imuReport/strike/analyzer/cameraWatchdog/replayExport/frameGrid/scanWindows），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
 - `node tests/run-video-test.mjs <video.webm> [front|side] [playbackRate]`：Playwright E2E，真实视频回归。加 `FF=EXPORT_ENABLED` 可校验导出契约。
-- E2E 环境须知：预装 Chromium 在 `/opt/pw-browsers/`（勿 `playwright install`）；**无 H.264 解码**，iPhone 素材要转 WebM（音轨 `-c:a libvorbis`；拼接必须 `filter_complex` 全重编码，concat demuxer 会断 vorbis 时间戳）；无头推理仅 ~3fps，用 playbackRate 0.25-0.5 补偿；本地静态服务 MIME 必须含 `.mjs`。
+- E2E 环境须知：预装 Chromium 在 `/opt/pw-browsers/`（勿 `playwright install`）；
+  **`page.waitForFunction(fn, arg, options)` 的 options 是第三个参数**——写成第二个会被当成 arg，
+  超时静默退回默认 30s，表现为"明明给了 180s 却 30s 就 Timeout"（本项目已踩过两次）；
+  合成带声音的素材要给**持续底噪**（`gain 0.002` 的振荡器），否则 Chromium 录出来整段静音、
+  音轨时长还跟视频对不上，检不到任何瞬态；**无 H.264 解码**，iPhone 素材要转 WebM（音轨 `-c:a libvorbis`；拼接必须 `filter_complex` 全重编码，concat demuxer 会断 vorbis 时间戳）；无头推理仅 ~3fps，用 playbackRate 0.25-0.5 补偿；本地静态服务 MIME 必须含 `.mjs`。
 - `node tests/replay-export.mjs`：慢放导出回归（canvas 合成素材 → `renderSlowMotion`）。断言：
   产出时长 ≈ 源 ÷ 倍速、区间导出（上传视频模式）同样成立、右上角水印把画面压暗、
   进度回调单调递增且收尾 100%、`play()` 被拒时秒级报错不挂到超时。需要浏览器，不进 CI 门禁。
 - `node tests/detector-determinism.mjs`：姿态推理可复现性回归（合成人形喂两遍，断言无状态
   模式关键点完全一致；VIDEO 模式作控制组必须不同）。需要浏览器。
 - `node tests/deterministic-analysis.mjs`：上传视频分析确定性回归（同一段合成视频跑两遍，
-  断言分析期间视频不播放、两次走过的帧时刻完全一致、步长是固定的 1/15s）。需要浏览器。
+  断言分析期间视频不播放、两次走过的帧时刻完全一致、先跑 1/6s 粗扫再以固定 1/12s 步长推理）。需要浏览器。
+- `node tests/strike-window.mjs`：击球区间定位回归（合成素材在第 5 秒放一段白噪爆发当击球声，
+  断言除起始归零外所有 seek 都落在 [击球−3s, 击球+2s] 内、帧数比整段少一大截、
+  走音频路径时不再跑帧差粗扫）。需要浏览器。
 - `node tests/mobile-polish.mjs`：移动端原生手感基线回归（viewport-fit / 未禁缩放 /
   touch-action / user-select / text-size-adjust / overscroll / 无 transition:all /
   :active 覆盖面 / 393px 无横向溢出 / 减弱动态降级）。需要浏览器。

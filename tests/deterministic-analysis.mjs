@@ -15,6 +15,9 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SCAN_PARAMS } from "../js/scanWindows.js";
+
+const SCAN_COARSE_FPS = SCAN_PARAMS.coarseFps;
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MIME = {
@@ -89,7 +92,7 @@ try {
   await page.waitForFunction(
     () => document.getElementById("stage").classList.contains("file-mode") &&
           document.getElementById("video").readyState >= 1,
-    { timeout: 30000 }
+    null, { timeout: 30000 } // waitForFunction 的第三个参数才是 options
   );
 
   const runOnce = async () => {
@@ -140,9 +143,16 @@ try {
     a.seeks.length > 5 && a.seeks.length === b.seeks.length &&
     a.seeks.every((x, i) => x === b.seeks[i]),
     `第一遍 ${a.seeks.length} 帧 / 第二遍 ${b.seeks.length} 帧，前 5 个：${a.seeks.slice(0, 5).join(" ")} vs ${b.seeks.slice(0, 5).join(" ")}`);
-  const step = a.seeks.length > 2 ? +(a.seeks[2] - a.seeks[1]).toFixed(4) : 0;
-  check("采样步长固定（与 frameGrid 的 FILE_SAMPLE_FPS 一致）",
-    Math.abs(step - 1 / 12) < 1e-3, `${step}s ≈ 1/12s`);
+  // seek 分两段：先是 1/6s 的帧差粗扫（定位"有动作且击到球"的区间），
+  // 再是 1/12s 的逐帧推理。步长要分别看，混在一起断言必然打架
+  const gaps = a.seeks.slice(1).map((x, i) => +(x - a.seeks[i]).toFixed(4));
+  check("先跑廉价粗扫定位（1/6s 步长，不做任何推理）",
+    gaps.length > 3 && Math.abs(gaps[1] - 1 / SCAN_COARSE_FPS) < 1e-3,
+    `${gaps[1]}s ≈ 1/${SCAN_COARSE_FPS}s`);
+  const tail = gaps.slice(-6, -1); // 末一格会被片尾截短，不参与
+  check("推理阶段采样步长固定（与 frameGrid 的 FILE_SAMPLE_FPS 一致）",
+    tail.length > 0 && tail.every((g) => Math.abs(g - 1 / 12) < 1e-3),
+    `${tail.join(" ")} ≈ 1/12s`);
   check("页面零报错", errors.length === 0, errors.join(" | "));
 } catch (err) {
   console.error("[FAIL] ", String(err).split("\n")[0]);

@@ -7,7 +7,7 @@
     "test:video": "node tests/run-video-test.mjs",
     "test:schema": "node --test tests/schema.test.mjs",
     "test:export": "node --test tests/export.test.mjs",
-    "test:unit": "node --test tests/schema.test.mjs tests/export.test.mjs tests/provider.test.mjs tests/imuReport.test.mjs tests/strike.test.mjs tests/analyzer.test.mjs tests/cameraWatchdog.test.mjs tests/replayExport.test.mjs tests/frameGrid.test.mjs",
+    "test:unit": "node --test tests/schema.test.mjs tests/export.test.mjs tests/provider.test.mjs tests/imuReport.test.mjs tests/strike.test.mjs tests/analyzer.test.mjs tests/cameraWatchdog.test.mjs tests/replayExport.test.mjs tests/frameGrid.test.mjs tests/scanWindows.test.mjs",
     "test:provider": "node --test tests/provider.test.mjs"
   },
   "devDependencies": {

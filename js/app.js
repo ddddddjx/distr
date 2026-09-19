@@ -8,7 +8,10 @@ import { buildSwingCard, buildWeeklyCard, tierOf, percentileOf, roastOf } from "
 import { flag } from "./flags.js";
 import { renderImuBlockHtml } from "./imuReport.js";
 import { decideRecovery, STALL_MS } from "./cameraWatchdog.js";
-import { sampleGrid, estimateAnalysisSeconds } from "./frameGrid.js";
+import { sampleGrid, estimateAnalysisSeconds, FILE_SAMPLE_FPS } from "./frameGrid.js";
+import {
+  SCAN_PARAMS, windowsFromStrikes, windowsFromMotion, planFrames, totalFrames, isFullScan,
+} from "./scanWindows.js";
 
 const APP_VERSION = "0.9.0";
 
@@ -26,6 +29,8 @@ const state = {
   handedness: "right",
   stream: null,
   fileUrl: null,
+  fileObj: null,
+  audioPeaks: undefined, // 本段素材的击球声峰（粗扫时解码一次，报告阶段复用）
   rafId: 0,
   frames: 0,
   fpsT0: performance.now(),
@@ -274,6 +279,7 @@ async function enterFileMode(file) {
   stopMediaSources();
   state.source = "file";
   state.fileObj = file; // 保留原始文件引用：击球声定位需解码音轨
+  state.audioPeaks = undefined; // 换了素材，上一段的击球声峰作废
   state.fileUrl = URL.createObjectURL(file);
   video.src = state.fileUrl;
   video.classList.remove("mirrored");
@@ -334,7 +340,10 @@ async function concludeFileAnalysis() {
   try {
     if (videoSwings.length > 1 && state.fileObj) {
       const { extractImpactTimes, hasStrikeNear, hasStrikeInRange } = await import("./strikeAudio.js");
-      const peaks = await extractImpactTimes(state.fileObj);
+      // 粗扫阶段已经解码过一次音轨，别再花 4 秒解一遍
+      const peaks = state.audioPeaks !== undefined
+        ? state.audioPeaks
+        : await extractImpactTimes(state.fileObj);
       if (peaks && peaks.length) {
         for (const sw of videoSwings) {
           // 优先按击球时刻点匹配；低帧率漏采 IMPACT 时退化为时间跨度匹配
@@ -563,33 +572,128 @@ function seekTo(t) {
 /** 让出一帧，好让画面刷新、「停止分析」点得动 */
 const nextPaint = () => new Promise((r) => requestAnimationFrame(r));
 
+/** 帧差粗扫用的小画布：64×36 足够判"有没有动作"，一帧不到 2ms */
+const scanCanvas = document.createElement("canvas");
+scanCanvas.width = 64;
+scanCanvas.height = 36;
+const scanCtx = scanCanvas.getContext("2d", { willReadFrequently: true });
+
 /**
- * 逐帧走完整段视频。时间基准用【网格时刻】而不是 video.currentTime：
+ * 廉价帧差粗扫：按粗网格 seek，把每帧缩到 64×36 求亮度平均绝对差。
+ * 只回答"这一刻画面在动吗"，不做任何推理。
+ * @returns {Promise<{t:number,d:number}[]>}
+ */
+async function coarseMotionScan(duration) {
+  const times = sampleGrid(duration, SCAN_PARAMS.coarseFps);
+  const { width: w, height: h } = scanCanvas;
+  const out = [];
+  let prev = null;
+  for (let i = 0; i < times.length; i++) {
+    if (!state.running) return out;
+    const t = times[i];
+    await seekTo(t);
+    let px;
+    try {
+      scanCtx.drawImage(video, 0, 0, w, h);
+      px = scanCtx.getImageData(0, 0, w, h).data;
+    } catch (e) {
+      return out; // 取不到像素（跨源等）：粗扫放弃，调用方回退整段
+    }
+    const cur = new Float32Array(w * h);
+    for (let j = 0, k = 0; j < px.length; j += 4, k++) {
+      cur[k] = (px[j] * 0.299 + px[j + 1] * 0.587 + px[j + 2] * 0.114) / 255;
+    }
+    if (prev) {
+      let acc = 0;
+      for (let k = 0; k < cur.length; k++) acc += Math.abs(cur[k] - prev[k]);
+      out.push({ t, d: acc / cur.length });
+    }
+    prev = cur;
+    // 粗扫也要有画面：iOS 上"暂停 + seek"的 video 不往屏幕合成
+    detector.draw(ctx, null, false, video);
+    const pct = Math.round(((i + 1) / times.length) * 100);
+    $("phasePill").textContent = `定位中 ${pct}%`;
+    $("fpsLabel").textContent = pct + "%";
+    await nextPaint();
+  }
+  return out;
+}
+
+/**
+ * 规划这次要推理哪些帧：先听击球声（不碰视频帧），没有再帧差粗扫，都落空回退整段。
+ * @returns {Promise<{start:number,end:number,times:number[]}[]>}
+ */
+async function planFileFrames(duration) {
+  // ① 击球声：最准也最便宜——它直接回答"击到球了吗"，一帧视频都不用碰
+  let peaks = null;
+  try {
+    if (state.fileObj) {
+      $("phasePill").textContent = "定位击球…";
+      const { extractImpactTimes } = await import("./strikeAudio.js");
+      peaks = await extractImpactTimes(state.fileObj);
+    }
+  } catch (e) {
+    peaks = null; // 无音轨/解码失败：降级，不影响分析
+  }
+  state.audioPeaks = peaks; // 报告阶段的试挥判定复用，别再解一次音轨
+  if (!state.running) return [];
+  // 听到击球声就到此为止：它比任何"动作能量"都更准，没必要再花几十次 seek 看画面
+  if (peaks && peaks.length) return planFrames(windowsFromStrikes(peaks, duration), duration);
+  // ② 没有击球声（静音素材/嘈杂被本底吃掉）：退到帧差粗扫，只判"有没有动作"
+  const samples = await coarseMotionScan(duration);
+  if (!state.running) return [];
+  return planFrames(windowsFromMotion(samples, duration), duration);
+}
+
+/**
+ * 逐帧走完计划内的区间。时间基准用【网格时刻】而不是 video.currentTime：
  * seek 会落到最近的可解码帧，用实际落点会把机器差异重新引回来。
+ * 窗口时刻取自全局网格的子集，所以裁剪只减少帧、不移动帧——
+ * 窗口内每一帧的采样时刻与整段扫描完全一致，分数依旧可复现。
  */
 async function runFileAnalysis() {
   const dur = Number.isFinite(video.duration) ? video.duration : 0;
-  const grid = sampleGrid(dur);
-  if (!grid.length) { showHint("读不到视频时长，无法分析", 4000); stopAnalysis(); return; }
+  if (!sampleGrid(dur).length) { showHint("读不到视频时长，无法分析", 4000); stopAnalysis(); return; }
   video.pause();   // 关键：不播放。一播放就又变成"抽到哪帧看运气"
   video.autoplay = false;
-  for (let i = 0; i < grid.length; i++) {
-    if (!state.running) return;         // 用户中途点了「停止分析」
-    const t = grid[i];
-    await seekTo(t);
-    if (!state.running) return;
-    // 时间基准用【网格时刻】而不是 video.currentTime：seek 会落到最近的
-    // 可解码帧，用实际落点会把机器差异重新引回来
-    const lms = detector.detectAt(video, t * 1000);
-    // detectAt 里已经把这一帧缩进工作画布，直接复用它当底图：
-    // iOS 上"暂停 + seek"的 video 不往屏幕合成，不自己画就是一片黑
-    processFrame(lms, t * 1000, detector.work);
-    const pct = Math.round(((i + 1) / grid.length) * 100);
-    $("fpsLabel").textContent = pct + "%";
-    // 相位药丸在文件模式下显示进度：IDLE 的文案是"请站好位置"，
-    // 对着一段已经拍好的视频说这个毫无意义
-    $("phasePill").textContent = `分析中 ${pct}%`;
-    await nextPaint();
+  const plan = await planFileFrames(dur);
+  if (!state.running) return;
+  if (!plan.length) { showHint("读不到视频时长，无法分析", 4000); stopAnalysis(); return; }
+  const total = totalFrames(plan);
+  const full = isFullScan(plan, dur);
+  showHint(
+    full
+      ? `未定位到击球区间，将逐帧分析整段（约 ${estimateAnalysisSeconds(dur)} 秒），请别离开本页`
+      : `已定位到击球区间，只分析这 ${plan.length} 段共 ${(total / FILE_SAMPLE_FPS).toFixed(1)} 秒`
+        + `（约 ${Math.max(1, Math.round((total * 100) / 1000))} 秒），请别离开本页`,
+    6000
+  );
+  let done = 0;
+  for (let wi = 0; wi < plan.length; wi++) {
+    // 跨窗口之间隔着被跳过的时间，状态机不能接着上一段推：
+    // 先把可能已经成型的那一杆收束存档，再从干净状态进入下一段
+    if (wi > 0) {
+      const tail = analyzer.finalize();
+      if (tail) videoSwings.push(packSwing(tail));
+      resetPerSwing();
+      analyzer.nextSwing();
+    }
+    for (const t of plan[wi].times) {
+      if (!state.running) return;       // 用户中途点了「停止分析」
+      await seekTo(t);
+      if (!state.running) return;
+      const lms = detector.detectAt(video, t * 1000);
+      // detectAt 里已经把这一帧缩进工作画布，直接复用它当底图：
+      // iOS 上"暂停 + seek"的 video 不往屏幕合成，不自己画就是一片黑
+      processFrame(lms, t * 1000, detector.work);
+      done++;
+      const pct = Math.round((done / total) * 100);
+      $("fpsLabel").textContent = pct + "%";
+      // 相位药丸在文件模式下显示进度：IDLE 的文案是"请站好位置"，
+      // 对着一段已经拍好的视频说这个毫无意义
+      $("phasePill").textContent = `分析中 ${pct}%`;
+      await nextPaint();
+    }
   }
   if (state.running) concludeFileAnalysis();
 }
@@ -695,11 +799,9 @@ async function startAnalysis() {
     // 关键：切到无状态推理。VIDEO 模式的跟踪状态会跨"两次分析"残留，
     // 第二次从头分析时开头几帧就偏、基准锁错——只统一帧序列是不够的
     await detector.setStateless(true);
-    const secs = estimateAnalysisSeconds(Number.isFinite(video.duration) ? video.duration : 0);
-    showHint(
-      `正在逐帧分析（约 ${secs} 秒）：同一段视频每次结果都一样，请别离开本页`,
-      6000
-    );
+    // 具体耗时要等粗扫定位完才知道（只分析击球区间能省掉大半帧），
+    // 这里先给一句"在干什么"，估时由 runFileAnalysis 定位后补上
+    showHint("正在定位击球区间…同一段视频每次结果都一样", 4000);
     // 逐帧是异步的，自己跑完自己收尾，不进 rAF 循环
     runFileAnalysis().catch((err) => {
       // 别让异常变成一条无人接手的 Promise 拒绝：那样按钮会一直显示
