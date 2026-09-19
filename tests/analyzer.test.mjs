@@ -103,3 +103,14 @@ test("幅度不足的 waggle 小动作：仍然不出报告（防误判未退化
   ]);
   assert.equal(swingOf(a, r.summary), null, "waggle 幅度不足，应被闸门拦下");
 });
+
+test("连续两杆：第一杆出报告、nextSwing 之后第二杆照样出报告", () => {
+  const a = fresh();
+  const r1 = drive(a, SWING);
+  assert.ok(swingOf(a, r1.summary), "第一杆应当出报告");
+  // 用户盯着报告看了几秒（相机仍在跑），然后点「继续练习」
+  const r15 = drive(a, [{ ms: 3000, handsY: [0.48, 0.70] }], r1.t);
+  a.nextSwing();
+  const r2 = drive(a, SWING, r15.t);
+  assert.ok(swingOf(a, r2.summary), "第二杆不能被上一杆的残留状态吞掉");
+});

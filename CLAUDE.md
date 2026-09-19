@@ -35,8 +35,17 @@
 | `js/providers/` | ExternalDataProvider 接口 + NullProvider + 动态装载 |
 | `js/imuReport.js` | 手腕数据区块纯渲染函数（imu 非空才渲染） |
 | `js/voice.js` / `js/shareCard.js` / `js/store.js` | 语音指导 / 分享卡生成 / 本地统计 |
+| `js/cameraWatchdog.js` | 预览卡死判定（纯函数叶子模块）：none / resume / reopen / stop |
 | `sw.js` | PWA：vendor 缓存优先（独立缓存，发布升版**不清**，否则每人重下 24MB）、外壳 install 预缓存、页面网络优先 |
 | `xhs-tool/` | 小红书小工具版（非 AI 回看训练器，容器无 WASM/无网络），独立维护 |
+
+**实时模式必须给摄像头预览保活**：iOS 播完报告里的慢放回放后，会把预览 `<video>` 暂停、
+严重时直接中断采集轨道（track muted/ended）。元素不报错、rAF 照转，但 `video.currentTime`
+不再前进 → `detect()` 每帧返回 undefined → 一帧都不再推理。用户看到的就是
+"第一杆能出报告，点完「继续练习」后第二杆怎么挥都识别不到"。三道防线：
+关报告时主动 `resumePreview()`；主循环连续 1.5s 没新帧则走 `cameraWatchdog` 分级恢复
+（续播 → 重开摄像头 → 三次仍无帧就停下来告诉用户）；FPS 面板只统计真正完成推理的帧，
+预览冻住时直接显示 0，不再用 60 FPS 的假象掩盖问题（回归见 `tests/preview-stall.mjs`）。
 
 报告里的慢放回放（`#replayVideo`）**必须带 poster 兜底**：iOS 上这个第二个 video 元素常常拿不到解码资源、
 或非用户手势的自动播放被拒，既不报错也不出帧，结果就是一片纯黑。铺一张本次挥杆的真实关键帧当 poster，
@@ -68,9 +77,11 @@
 
 ## 测试
 
-- `npm run test:unit`：53 个单测（schema/export/provider/imuReport/strike/analyzer），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
+- `npm run test:unit`：61 个单测（schema/export/provider/imuReport/strike/analyzer/cameraWatchdog），CI 门禁。analyzer 用合成关键点驱动状态机，无需浏览器与真实视频。
 - `node tests/run-video-test.mjs <video.webm> [front|side] [playbackRate]`：Playwright E2E，真实视频回归。加 `FF=EXPORT_ENABLED` 可校验导出契约。
 - E2E 环境须知：预装 Chromium 在 `/opt/pw-browsers/`（勿 `playwright install`）；**无 H.264 解码**，iPhone 素材要转 WebM（音轨 `-c:a libvorbis`；拼接必须 `filter_complex` 全重编码，concat demuxer 会断 vorbis 时间戳）；无头推理仅 ~3fps，用 playbackRate 0.25-0.5 补偿；本地静态服务 MIME 必须含 `.mjs`。
+- `node tests/preview-stall.mjs`：实时模式预览卡死恢复回归（假摄像头启动分析 → 暂停预览元素 /
+  停掉采集轨道 → 断言看门狗把画面救回来、推理继续）。需要浏览器，不进 CI 门禁。
 - `node tests/sw-offline.mjs`：Service Worker 离线启动回归。守的是线上事故——网络优先分支回退缓存未命中时
   `respondWith(undefined)` 会让导航直接失败，装到主屏幕的 PWA 启动后黑屏转白屏打不开。兜底必须返回真实 Response。
 - 测试素材在 `tests/assets/`（gitignored，容器重置后需重新转码生成）。
