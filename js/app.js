@@ -350,6 +350,14 @@ async function concludeFileAnalysis() {
 }
 
 /** 呈现视频中的第 i 次挥杆（评分/回放/关键帧/标注均为该杆数据） */
+/** 重放一次 CSS 动画：改类名不够，必须先摘掉、强制重排、再挂上 */
+function replayAnim(el, cls) {
+  if (!el) return;
+  el.classList.remove(cls);
+  void el.offsetWidth;
+  el.classList.add(cls);
+}
+
 function presentSwing(i, opts = {}) {
   const sw = videoSwings[i];
   if (!sw) return;
@@ -360,6 +368,12 @@ function presentSwing(i, opts = {}) {
     celebrate: !!opts.celebrate, // 切换查看时不重复撒彩带/震动
     audioUsed: !!opts.audioUsed,
   });
+  // 只有"切换杆号"才给正文淡入：首次开报告时 sheet 本身在入场，
+  // 再套一层内部动画只会让报告显得慢
+  if (!opts.celebrate) {
+    replayAnim($("summaryBody"), "content-swap");
+    replayAnim($("keyframesWrap"), "content-swap");
+  }
 }
 
 video.addEventListener("ended", () => {
@@ -923,9 +937,10 @@ let hintTimer = 0;
 function showHint(text, ms = 3000) {
   const el = $("hint");
   el.textContent = text;
-  el.classList.remove("hidden");
+  // 用 .visible 而不是 .hidden：display:none 没法过渡，消失时会硬切
+  el.classList.add("visible");
   clearTimeout(hintTimer);
-  hintTimer = setTimeout(() => el.classList.add("hidden"), ms);
+  hintTimer = setTimeout(() => el.classList.remove("visible"), ms);
 }
 
 function hintForView() {

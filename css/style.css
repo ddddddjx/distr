@@ -238,7 +238,12 @@ button { font-family: var(--font); }
 .hint {
   position: absolute; z-index: 5;
   bottom: calc(var(--chrome-bottom, 150px) + 52px);
-  left: 50%; transform: translateX(-50%);
+  left: 50%;
+  /* 进出走同一条路径（上浮 4px），且只动 transform/opacity。
+     180ms：这个提示一天要出现几十次，动作必须近乎无感 */
+  transform: translate(-50%, -4px);
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.18s var(--ease-out), transform 0.18s var(--ease-out);
   max-width: calc(100% - 48px);
   padding: 10px var(--sp-4); border-radius: var(--r-sm);
   background: var(--material-thick);
@@ -248,6 +253,8 @@ button { font-family: var(--font); }
   text-align: center;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
+.hint.visible { opacity: 1; transform: translate(-50%, 0); }
+
 
 .confetti { position: fixed; inset: 0; z-index: 40; pointer-events: none; }
 
@@ -453,7 +460,18 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
   gap: 6px;
   margin-bottom: var(--sp-4);
 }
-.kf { margin: 0; }
+/* ② 关键帧四宫格：错峰入场，别四张图一起"啪"地出现。
+   40ms 间隔（技能建议 30–80ms），纯装饰、不阻塞任何操作 */
+.kf {
+  margin: 0;
+  animation: kf-in 0.22s var(--ease-out) both;
+}
+.kf:nth-child(2) { animation-delay: 40ms; }
+.kf:nth-child(3) { animation-delay: 80ms; }
+.kf:nth-child(4) { animation-delay: 120ms; }
+@keyframes kf-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+}
 .kf img { width: 100%; border-radius: var(--r-sm); border: 0.33px solid var(--separator); display: block; }
 .kf figcaption { font-size: 10px; color: var(--label-3); margin-top: 3px; text-align: center; }
 
@@ -695,6 +713,7 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;   /* 错峰延迟清零，否则元素会"迟到" */
     animation-iteration-count: 1 !important;
     transition-duration: 0.12s !important;
     scroll-behavior: auto !important;
@@ -705,3 +724,26 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
   .icon-btn:active { transform: none; }
   #summaryModal .modal-card, .modal.center .modal-card { animation: none !important; }
 }
+
+/* ③ 逐杆切换时报告正文淡入：整块内容瞬间替换太跳。首次打开报告不用——
+   那时 sheet 自己在入场，再套一层内部动画只会显得慢 */
+.content-swap { animation: content-in 0.16s var(--ease-out) both; }
+@keyframes content-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+
+/* ④ 两步保存的状态转折：按钮从"生成"变成"点此保存到相册"是流程关键点，
+   用户必须注意到。颜色过渡 + 一次极轻的脉冲把视线引过去，只此一次 */
+.icon-btn, button.primary, button.ghost {
+  transition: transform 0.15s var(--ease-out), opacity 0.2s var(--ease-out),
+              background 0.2s var(--ease-out), border-color 0.2s var(--ease-out),
+              color 0.2s var(--ease-out);
+}
+.modal-card .ghost.wide.ready { animation: ready-pulse 0.24s var(--ease-out); }
+@keyframes ready-pulse {
+  50% { transform: scale(1.025); }
+}
+
+/* ⑤ 报告里的回放视频装载完成：一块黑框凭空出现太突兀 */
+.replay { animation: fade-in 0.2s var(--ease-out); }
+@keyframes fade-in { from { opacity: 0; } }
