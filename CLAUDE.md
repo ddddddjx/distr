@@ -141,8 +141,20 @@ review-animations 标准。这些是"一个网页"与"一个 App"的分界线，
   平移到游标之后（不是 clamp：clamp 会把所有帧压成 1ms 间隔，跟踪行为与真实节奏对不上）。
 - 代价：分析不再是实时，10 秒视频要等几十秒，必须给进度（顶栏显示百分比）。
 - 相机模式不受影响：现场只能实时，时间基准仍是墙钟。
-- 回归见 `tests/deterministic-analysis.mjs`（两次分析走过的帧时刻必须完全一致）
-  与 `tests/frameGrid.test.mjs`。
+- **只统一帧序列还不够，模型本身也带状态**：MediaPipe 的 VIDEO 模式用上一帧的结果做
+  跟踪 ROI，而 landmarker 是全局长寿命实例——第二次从头分析时跟踪器里还留着第一次
+  最后一帧的状态，开头几帧就偏、基准锁错、分数天差地别（用户实测同一段视频 50 分 / 90 分，
+  第一轮只修了帧序列，没解决）。实测同一串 12 帧喂两遍，关键点最大坐标差：
+  **VIDEO 0.19，IMAGE 0.000**。所以上传视频必须 `detector.setStateless(true)` 走 IMAGE
+  无状态模式，分析结束（含中途停止）切回 VIDEO——相机要靠跟踪。
+  代价：没有跟踪 ROI 加速，每帧全图检测，实测慢约 1.6 倍。
+- **时间戳倒退会永久毒死推理图**：实测只要喂进一个倒退的时间戳，之后即使给合法时间戳
+  也一直 `Graph has errors`，除非重建 landmarker。`_ts()` 保证我们自己不倒退；
+  `_run()` 是最后兜底——图坏了就降级成"这帧没人"并通过 `onBroken` 明确告诉用户刷新，
+  绝不每帧抛异常、让用户对着一个"有画面、没结果"的 App 反复挥杆。
+- 回归见 `tests/detector-determinism.mjs`（**直接比对关键点数值**，并用 VIDEO 模式做控制组
+  证明这条测试测得到东西）、`tests/deterministic-analysis.mjs`（帧序列）与 `tests/frameGrid.test.mjs`。
+  教训：上一版只断言"两次走过的帧时刻一致"，没验模型输出，这个 bug 就是这么溜过去的。
 
 ## 分析器关键设计（改动前必读）
 
@@ -181,6 +193,8 @@ review-animations 标准。这些是"一个网页"与"一个 App"的分界线，
 - `node tests/replay-export.mjs`：慢放导出回归（canvas 合成素材 → `renderSlowMotion`）。断言：
   产出时长 ≈ 源 ÷ 倍速、区间导出（上传视频模式）同样成立、右上角水印把画面压暗、
   进度回调单调递增且收尾 100%、`play()` 被拒时秒级报错不挂到超时。需要浏览器，不进 CI 门禁。
+- `node tests/detector-determinism.mjs`：姿态推理可复现性回归（合成人形喂两遍，断言无状态
+  模式关键点完全一致；VIDEO 模式作控制组必须不同）。需要浏览器。
 - `node tests/deterministic-analysis.mjs`：上传视频分析确定性回归（同一段合成视频跑两遍，
   断言分析期间视频不播放、两次走过的帧时刻完全一致、步长是固定的 1/15s）。需要浏览器。
 - `node tests/mobile-polish.mjs`：移动端原生手感基线回归（viewport-fit / 未禁缩放 /

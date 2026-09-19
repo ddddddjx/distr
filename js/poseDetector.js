@@ -32,6 +32,30 @@ export class PoseDetector {
     // 直接喂 0 会被判成时间戳倒退。这里用游标 + 基准偏移把两种时间轴接起来。
     this.lastTs = -1;
     this.tsBase = 0;
+    // 当前是否处于无状态（IMAGE）模式。VIDEO 模式会用上一帧的结果做跟踪 ROI，
+    // 这份状态跨"两次分析"残留：第二次从头分析时，跟踪器里还留着第一次最后
+    // 一帧的状态，开头几帧就偏，基准锁错，分数天差地别。
+    // 实测同一串 12 帧喂两遍：VIDEO 模式鼻子关键点差 0.04（归一化坐标，
+    // 足够把规则阈值整个翻过去），IMAGE 模式差 0.000。
+    this.stateless = false;
+    // 图是否已被污染。实测：只要喂进一个倒退的时间戳，MediaPipe 的图就
+    // 【永久】坏掉——之后即使给合法时间戳也一直 "Graph has errors"，
+    // 除非重建 landmarker。_ts() 保证我们自己不会倒退，这里是最后一道兜底：
+    // 宁可降级成"这帧没检测到人"，也不能每帧抛异常、让用户对着一个静默失效的 App。
+    this.broken = false;
+  }
+
+  /** 统一的推理出口：图一旦坏掉就降级为 null，并且只报一次 */
+  _run(fn) {
+    if (this.broken) return null;
+    try {
+      const r = fn();
+      return r.landmarks && r.landmarks.length > 0 ? r.landmarks[0] : null;
+    } catch (err) {
+      this.broken = true;
+      this.onBroken?.(err);
+      return null;
+    }
   }
 
   /** 交给 MediaPipe 的时间戳：保证严格递增 */
@@ -101,10 +125,7 @@ export class PoseDetector {
   detect(video, nowMs) {
     if (!this.landmarker || video.currentTime === this.lastVideoTime) return undefined;
     this.lastVideoTime = video.currentTime;
-    const result = this.landmarker.detectForVideo(video, this._ts(nowMs));
-    return result.landmarks && result.landmarks.length > 0
-      ? result.landmarks[0]
-      : null;
+    return this._run(() => this.landmarker.detectForVideo(video, this._ts(nowMs)));
   }
 
   /**
@@ -115,18 +136,32 @@ export class PoseDetector {
   detectAt(video, tMs) {
     if (!this.landmarker) return null;
     this.lastVideoTime = video.currentTime;
-    // 平移到游标之后：既满足单调，又保留真实的帧间隔（直接 clamp 会把所有
-    // 帧压成 1ms 间隔，MediaPipe 的跟踪行为就跟真实节奏对不上了）
-    const result = this.landmarker.detectForVideo(video, this._ts(this.tsBase + tMs));
-    return result.landmarks && result.landmarks.length > 0
-      ? result.landmarks[0]
-      : null;
+    // 无状态模式下走 detect()：不吃时间戳，也不带跟踪状态——这正是
+    // "同一段视频两次分数一致"的前提
+    return this._run(() =>
+      this.stateless
+        ? this.landmarker.detect(video)
+        // 兜底（未能切到 IMAGE 模式时）：平移到游标之后，既满足单调又保留
+        // 真实帧间隔（直接 clamp 会把所有帧压成 1ms 间隔）
+        : this.landmarker.detectForVideo(video, this._ts(this.tsBase + tMs))
+    );
   }
 
   /** 开始一条新的时间线：把随后 detectAt() 的视频时间平移到当前游标之后。
-   *  上传视频每次开始分析前调用一次。 */
+   *  只在 VIDEO 模式下有意义（IMAGE 模式不吃时间戳）。 */
   beginTimeline() {
     this.tsBase = this.lastTs + 1;
+  }
+
+  /**
+   * 切换无状态（IMAGE）模式。上传视频的确定性分析必须开，相机模式必须关：
+   * - 开：每帧独立推理，同一帧永远同一结果，代价是没有跟踪加速，更慢；
+   * - 关：VIDEO 模式带跟踪，实时更快更稳，但结果依赖历史，无法复现。
+   */
+  async setStateless(on) {
+    if (!this.landmarker || this.stateless === on) return;
+    await this.landmarker.setOptions({ runningMode: on ? "IMAGE" : "VIDEO" });
+    this.stateless = on;
   }
 
   /** 在叠加层上绘制骨骼连线和关键点 */
