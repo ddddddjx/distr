@@ -114,3 +114,38 @@ test("连续两杆：第一杆出报告、nextSwing 之后第二杆照样出报�
   const r2 = drive(a, SWING, r15.t);
   assert.ok(swingOf(a, r2.summary), "第二杆不能被上一杆的残留状态吞掉");
 });
+
+// —— 单帧漏检容忍 ——
+// 手机上下杆那 0.25 秒运动模糊最重，lite 模型经常连丢几帧。把单帧漏检当成
+// "人离开画面"会两头出错：顶点前作废基准 → 整杆识别不到；顶点后立刻收束
+// → 挥杆打到一半就弹出报告（用户实测："动作还没打完就给我打分了"）。
+
+test("上杆中单帧漏检：基准不能作废，这一杆不能丢", () => {
+  const a = fresh();
+  const r1 = drive(a, SWING.slice(0, 2)); // 准备 → 上杆
+  assert.equal(a.phase, PHASE.BACKSWING);
+  const r2 = drive(a, [{ ms: 33, handsY: [0.42, 0.42], gone: true }], r1.t);
+  assert.ok(a.baseline, "一帧漏检就作废基准 = 整段都识别不到挥杆");
+  const r3 = drive(a, SWING.slice(2), r2.t);
+  assert.ok(swingOf(a, r3.summary), "漏检帧之后这一杆应当照常走完并出报告");
+});
+
+test("顶点之后单帧漏检：不能当场收束（挥杆还没打完）", () => {
+  const a = fresh();
+  const r1 = drive(a, SWING.slice(0, 3)); // 准备 → 上杆 → 顶点
+  const r2 = drive(a, [{ ms: 33, handsY: [0.46, 0.46], gone: true }], r1.t);
+  assert.equal(r2.summary, null, "一帧看不到人就出报告 = 挥杆中途弹报告");
+  assert.notEqual(a.phase, PHASE.FINISH);
+  const r3 = drive(a, SWING.slice(3), r2.t);
+  assert.ok(swingOf(a, r3.summary), "漏检帧之后这一杆应当照常走完并出报告");
+});
+
+test("单帧髋部跳变（裙装遮挡/运动模糊）：不能当场收束", () => {
+  const a = fresh();
+  const r1 = drive(a, SWING.slice(0, 3));
+  const r2 = drive(a, [{ ms: 33, handsY: [0.46, 0.46], hipY: [0.15, 0.15] }], r1.t);
+  assert.equal(r2.summary, null, "单帧髋部估计跳变不该当场出报告");
+  assert.notEqual(a.phase, PHASE.FINISH);
+  const r3 = drive(a, SWING.slice(3), r2.t);
+  assert.ok(swingOf(a, r3.summary), "跳变帧之后这一杆应当照常走完并出报告");
+});
