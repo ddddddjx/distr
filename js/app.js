@@ -51,6 +51,9 @@ let recorder = null;          // 实时模式：MediaRecorder
 let recChunks = [];
 let replayUrl = null;         // 实时模式：回放 blob URL
 let replayFallbackTimer = 0;  // 回放没出帧时切到原生控件的兜底计时器
+// 回放慢放倍速。导出慢放视频用的是同一个常量——两处若各写各的，
+// 用户存下来的文件就会和报告里看到的速度对不上
+const REPLAY_RATE = 0.4;
 const replaySegment = { start: 0, end: 0 }; // 视频模式：挥杆起止时间点
 let impactVideoT = null; // 当前挥杆的击球时刻（视频时间轴秒）
 // 视频模式：整段视频中检测到的每次完整挥杆（试挥+正式击球）。
@@ -670,6 +673,8 @@ function showSummary(summary, opts = {}) {
     ? renderImuBlockHtml(summary.imu ?? null)
     : "";
 
+  updateSaveReplayBtn();
+
   const body = $("summaryBody");
   if (faults.length === 0) {
     body.innerHTML = `<p class="summary-good">🎉 本次挥杆没有检测到明显问题，动作很棒！</p>`;
@@ -772,7 +777,7 @@ function stopRecorderToReplay() {
     const rv = $("replayVideo");
     rv.poster = replayPoster();
     rv.controls = false;
-    rv.onloadeddata = () => { rv.playbackRate = 0.4; };
+    rv.onloadeddata = () => { rv.playbackRate = REPLAY_RATE; };
     rv.ontimeupdate = null;
     rv.src = replayUrl;
     rv.classList.remove("hidden");
@@ -825,10 +830,10 @@ function showReplay() {
   // 用 loadedmetadata 定位：它比 loadeddata 先到，seek 有更多时间完成
   rv.onloadedmetadata = () => {
     rv.currentTime = start;
-    rv.playbackRate = 0.4;
+    rv.playbackRate = REPLAY_RATE;
   };
   rv.onloadeddata = () => {
-    rv.playbackRate = 0.4;
+    rv.playbackRate = REPLAY_RATE;
     rv.play().catch(() => { rv.controls = true; });
   };
   rv.ontimeupdate = () => {
@@ -854,6 +859,7 @@ function cleanupReplay() {
   replaySegment.end = 0;
   $("keyframesWrap").classList.add("hidden");
   $("summaryTempo").classList.add("hidden");
+  updateSaveReplayBtn();
 }
 
 let hintTimer = 0;
@@ -1050,6 +1056,86 @@ $("shareSend").addEventListener("click", async () => {
     }
   } catch {
     /* 用户取消分享 */
+  }
+});
+
+/* ---------- 保存慢放视频（REPLAY_DOWNLOAD） ---------- */
+
+/** 本次报告能不能导出回放：相机模式看录到的 blob，视频模式看挥杆区间 */
+function replaySource() {
+  if (state.source === "camera")
+    return replayUrl ? { start: 0, end: 0, hasRawBlob: true } : null;
+  if (state.fileUrl && replaySegment.end > replaySegment.start)
+    return { start: replaySegment.start, end: replaySegment.end, hasRawBlob: false };
+  return null;
+}
+
+function updateSaveReplayBtn() {
+  const btn = $("saveReplayBtn");
+  if (!btn) return;
+  btn.classList.toggle("hidden", !(flag("REPLAY_DOWNLOAD") && replaySource()));
+  btn.disabled = false;
+  btn.textContent = "保存慢放视频";
+}
+
+$("saveReplayBtn").addEventListener("click", async () => {
+  const src = replaySource();
+  if (!src) return;
+  const btn = $("saveReplayBtn");
+  const rv = $("replayVideo");
+  btn.disabled = true;
+  try {
+    const ex = await import("./replayExport.js");
+    const cap = ex.exportCapability({
+      hasSource: true,
+      hasRawBlob: src.hasRawBlob,
+      hasCaptureStream: typeof HTMLCanvasElement.prototype.captureStream === "function",
+      hasRecorder: typeof window.MediaRecorder === "function",
+    });
+    if (cap === "none") {
+      showHint("当前浏览器无法保存回放视频", 4000);
+      return;
+    }
+    let blob, mime;
+    if (cap === "slowmo") {
+      // 区间时长取不到时（blob 回放的 duration 常为 Infinity）按整段算
+      const end = src.end || (Number.isFinite(rv.duration) ? rv.duration : 0);
+      const secs = Math.ceil(ex.estimateSeconds(src.start, end, REPLAY_RATE)) || 5;
+      btn.textContent = `正在生成慢放视频…约 ${secs} 秒`;
+      showHint(`正在本地生成慢放视频（约 ${secs} 秒），视频不会上传，请别离开本页`, secs * 1000);
+      const loop = rv.ontimeupdate;   // 区间循环会打断录制，先摘掉
+      rv.ontimeupdate = null;
+      rv.loop = false;
+      try {
+        blob = await ex.renderSlowMotion(rv, { rate: REPLAY_RATE, start: src.start, end: src.end });
+      } finally {
+        rv.ontimeupdate = loop;
+        rv.loop = true;
+        rv.currentTime = src.start;
+        rv.playbackRate = REPLAY_RATE;
+        rv.play().catch(() => { rv.controls = true; });
+      }
+      mime = blob.type;
+    } else {
+      // 拿不到重编码能力：如实降级为原速片段，不假装是慢放
+      blob = await (await fetch(replayUrl)).blob();
+      mime = blob.type;
+    }
+    const name = ex.exportFileName(lastSummary?.score, mime);
+    btn.textContent = "正在保存…";
+    const how = await ex.saveVideoBlob(blob, name);
+    showHint(
+      cap === "slowmo"
+        ? (how === "shared" ? "慢放视频已生成，选「存储视频」即可存进相册" : `慢放视频已保存：${name}`)
+        : "当前浏览器不支持本地转码，已保存【原速】片段（在剪辑 App 里可调慢）",
+      6000
+    );
+  } catch (err) {
+    // 用户在系统分享面板点取消也会走到这里，不当成错误刷屏
+    const cancelled = err && (err.name === "AbortError" || err.name === "NotAllowedError");
+    if (!cancelled) showHint("保存失败：" + (err?.message || err), 5000);
+  } finally {
+    updateSaveReplayBtn();
   }
 });
 
