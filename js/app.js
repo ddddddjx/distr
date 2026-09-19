@@ -1061,6 +1061,13 @@ $("shareSend").addEventListener("click", async () => {
 
 /* ---------- 保存慢放视频（REPLAY_DOWNLOAD） ---------- */
 
+// 转码好但还没交给用户的慢放文件。必须存成两步：
+// iOS 的 navigator.share() 只接受【用户手势直接触发】的调用，而转码要跑好几秒，
+// 手势早过期了——share() 会抛 NotAllowedError，分享面板根本不弹，用户既没看到
+// 面板也没看到报错（旧实现还把它当"用户取消"吞掉了）。所以转码完先把文件握在
+// 手里，把按钮变成"点此保存"，用户那一下点击就是新鲜手势，面板必定弹出。
+let pendingReplay = null; // { blob, name, slowmo }
+
 /** 本次报告能不能导出回放：相机模式看录到的 blob，视频模式看挥杆区间 */
 function replaySource() {
   if (state.source === "camera")
@@ -1070,72 +1077,121 @@ function replaySource() {
   return null;
 }
 
+/** 回到第一步（换杆、关报告、保存完成后都要复位，别把上一杆的文件留着） */
 function updateSaveReplayBtn() {
   const btn = $("saveReplayBtn");
   if (!btn) return;
+  pendingReplay = null;
   btn.classList.toggle("hidden", !(flag("REPLAY_DOWNLOAD") && replaySource()));
+  btn.classList.remove("ready");
   btn.disabled = false;
   btn.textContent = "保存慢放视频";
 }
 
-$("saveReplayBtn").addEventListener("click", async () => {
-  const src = replaySource();
-  if (!src) return;
+/** 第一步：本地转码，按钮上跑实时进度（两种模式共用同一条路径） */
+async function buildSlowMotion(src) {
   const btn = $("saveReplayBtn");
   const rv = $("replayVideo");
-  btn.disabled = true;
+  const ex = await import("./replayExport.js");
+  const cap = ex.exportCapability({
+    hasSource: true,
+    hasRawBlob: src.hasRawBlob,
+    hasCaptureStream: typeof HTMLCanvasElement.prototype.captureStream === "function",
+    hasRecorder: typeof window.MediaRecorder === "function",
+  });
+  if (cap === "none") throw new Error("当前浏览器无法保存回放视频");
+  if (cap === "raw") {
+    // 拿不到重编码能力：如实降级为原速片段，不假装是慢放
+    const blob = await (await fetch(replayUrl)).blob();
+    return { blob, name: ex.exportFileName(lastSummary?.score, blob.type), slowmo: false };
+  }
+  // 时长只探测一次：相机模式的 blob duration 常年 Infinity，要 seek 出来。
+  // 顺手把 end 补全，renderSlowMotion 里就不必再探一遍
+  const end = src.end > src.start ? src.end : src.start + (await ex.resolveDuration(rv));
+  const secs = Math.max(1, Math.ceil(ex.estimateSeconds(src.start, end, REPLAY_RATE)));
+  btn.textContent = `正在生成慢放视频 0%`;
+  showHint(`正在本地生成慢放视频（约 ${secs} 秒），视频不会上传，请别离开本页`, secs * 1000 + 2000);
+  const loop = rv.ontimeupdate;   // 区间循环会打断录制，先摘掉
+  rv.ontimeupdate = null;
+  rv.loop = false;
+  let blob;
   try {
-    const ex = await import("./replayExport.js");
-    const cap = ex.exportCapability({
-      hasSource: true,
-      hasRawBlob: src.hasRawBlob,
-      hasCaptureStream: typeof HTMLCanvasElement.prototype.captureStream === "function",
-      hasRecorder: typeof window.MediaRecorder === "function",
+    blob = await ex.renderSlowMotion(rv, {
+      rate: REPLAY_RATE, start: src.start, end,
+      onProgress: (p) => {
+        const pct = Math.round(p * 100);
+        const left = Math.max(0, Math.ceil(secs * (1 - p)));
+        btn.textContent = `正在生成慢放视频 ${pct}%${left ? ` · 还剩 ${left} 秒` : ""}`;
+      },
     });
-    if (cap === "none") {
-      showHint("当前浏览器无法保存回放视频", 4000);
-      return;
-    }
-    let blob, mime;
-    if (cap === "slowmo") {
-      // 区间时长取不到时（blob 回放的 duration 常为 Infinity）按整段算
-      const end = src.end || (Number.isFinite(rv.duration) ? rv.duration : 0);
-      const secs = Math.ceil(ex.estimateSeconds(src.start, end, REPLAY_RATE)) || 5;
-      btn.textContent = `正在生成慢放视频…约 ${secs} 秒`;
-      showHint(`正在本地生成慢放视频（约 ${secs} 秒），视频不会上传，请别离开本页`, secs * 1000);
-      const loop = rv.ontimeupdate;   // 区间循环会打断录制，先摘掉
-      rv.ontimeupdate = null;
-      rv.loop = false;
-      try {
-        blob = await ex.renderSlowMotion(rv, { rate: REPLAY_RATE, start: src.start, end: src.end });
-      } finally {
-        rv.ontimeupdate = loop;
-        rv.loop = true;
-        rv.currentTime = src.start;
-        rv.playbackRate = REPLAY_RATE;
-        rv.play().catch(() => { rv.controls = true; });
-      }
-      mime = blob.type;
-    } else {
-      // 拿不到重编码能力：如实降级为原速片段，不假装是慢放
-      blob = await (await fetch(replayUrl)).blob();
-      mime = blob.type;
-    }
-    const name = ex.exportFileName(lastSummary?.score, mime);
-    btn.textContent = "正在保存…";
+  } finally {
+    rv.ontimeupdate = loop;
+    rv.loop = true;
+    rv.currentTime = src.start;
+    rv.playbackRate = REPLAY_RATE;
+    rv.play().catch(() => { rv.controls = true; });
+  }
+  return { blob, name: ex.exportFileName(lastSummary?.score, blob.type), slowmo: true };
+}
+
+/** 第二步：把握在手里的文件交出去。必须在用户点击的同一个事件里调用 */
+async function handOffReplay() {
+  const { blob, name, slowmo } = pendingReplay;
+  const btn = $("saveReplayBtn");
+  const ex = await import("./replayExport.js");
+  try {
     const how = await ex.saveVideoBlob(blob, name);
+    btn.textContent = "已保存 ✓";
     showHint(
-      cap === "slowmo"
-        ? (how === "shared" ? "慢放视频已生成，选「存储视频」即可存进相册" : `慢放视频已保存：${name}`)
-        : "当前浏览器不支持本地转码，已保存【原速】片段（在剪辑 App 里可调慢）",
+      how === "shared"
+        ? (slowmo
+            ? "在弹出的面板里选「存储视频」即可存进相册"
+            : "已保存【原速】片段（本机不支持本地转码，可在剪辑 App 里调慢）")
+        : `已下载到「文件」App：${name}`,
       6000
     );
+    setTimeout(updateSaveReplayBtn, 2500);
   } catch (err) {
-    // 用户在系统分享面板点取消也会走到这里，不当成错误刷屏
-    const cancelled = err && (err.name === "AbortError" || err.name === "NotAllowedError");
-    if (!cancelled) showHint("保存失败：" + (err?.message || err), 5000);
-  } finally {
-    updateSaveReplayBtn();
+    if (err?.name === "AbortError") {   // 用户自己在面板上点了取消：留在第二步等他再点
+      btn.textContent = "存到相册 · 点此完成";
+      return;
+    }
+    // 分享被系统拒绝（手势失效等）→ 退回下载，别让用户白转一圈
+    try {
+      await ex.saveVideoBlob(blob, name, { forceDownload: true });
+      btn.textContent = "已保存 ✓";
+      showHint(`系统分享不可用，已下载到「文件」App：${name}`, 6000);
+      setTimeout(updateSaveReplayBtn, 2500);
+    } catch (e2) {
+      // 两条路都走不通就如实说，不能显示"已保存"骗人
+      btn.textContent = "存到相册 · 点此重试";
+      showHint("保存失败：" + (e2?.message || err?.message || err), 6000);
+    }
+  }
+}
+
+$("saveReplayBtn").addEventListener("click", async () => {
+  const btn = $("saveReplayBtn");
+  if (pendingReplay) return void handOffReplay();  // 第二步：这一下就是新鲜手势
+  const src = replaySource();
+  if (!src) return;
+  btn.disabled = true;
+  try {
+    pendingReplay = await buildSlowMotion(src);
+    btn.disabled = false;
+    btn.classList.add("ready");
+    btn.textContent = pendingReplay.slowmo ? "存到相册 · 点此完成" : "保存原速片段 · 点此完成";
+    showHint(
+      pendingReplay.slowmo
+        ? "慢放视频已生成 · 点上面的按钮，在弹出的面板里选「存储视频」"
+        : "本机不支持本地转码，已备好【原速】片段 · 点上面的按钮保存",
+      8000
+    );
+  } catch (err) {
+    pendingReplay = null;
+    btn.disabled = false;
+    btn.textContent = "保存慢放视频";
+    showHint("生成失败：" + (err?.message || err), 5000);
   }
 });
 

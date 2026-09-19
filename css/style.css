@@ -311,6 +311,14 @@ button.ghost { background: var(--fill-3); color: var(--label); font-size: var(--
 }
 .modal-card .primary { width: 100%; margin-top: var(--sp-2); }
 .modal-card .ghost.wide { width: 100%; margin-top: var(--sp-1); }
+/* 慢放视频已生成、等用户再点一下交付（iOS 的分享面板只认新鲜手势）：
+   这一步必须显眼，否则用户以为已经存好了就走了 */
+.modal-card .ghost.wide.ready {
+  background: rgba(48, 209, 88, 0.16);
+  border-color: rgba(48, 209, 88, 0.55);
+  color: var(--green);
+  font-weight: 600;
+}
 
 /* ============ 报告 Sheet ============ */
 /* 逐杆切换器 */

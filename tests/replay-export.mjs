@@ -85,8 +85,36 @@ try {
     await new Promise((res) => { v.onloadeddata = res; setTimeout(res, 5000); });
 
     const t0 = performance.now();
-    const out = await ex.renderSlowMotion(v, { rate: 0.4, start: 0, end: 0, maxW: 320 });
+    const seen = [];   // 进度回调：用户必须看得到转码在动
+    const out = await ex.renderSlowMotion(v, {
+      rate: 0.4, start: 0, end: 0, maxW: 320,
+      onProgress: (p) => seen.push(p),
+    });
     const wall = (performance.now() - t0) / 1000;
+
+    // 水印：右上角应当被画上品牌胶囊。取导出视频首帧，比对右上角与左上角亮度
+    const stamp = await new Promise((resolve) => {
+      const vv = document.createElement("video");
+      vv.muted = true; vv.playsInline = true;
+      // 必须 seek 到片中再取帧：loadeddata 时拿到的往往还是一张黑帧
+      vv.onloadeddata = () => { vv.currentTime = 0.5; };
+      vv.onseeked = () => {
+        vv.onseeked = null;
+        const c = document.createElement("canvas");
+        c.width = vv.videoWidth; c.height = vv.videoHeight;
+        const cx = c.getContext("2d");
+        cx.drawImage(vv, 0, 0);
+        const lum = (x, y, w, h) => {
+          const d = cx.getImageData(x, y, w, h).data;
+          let sum = 0;
+          for (let i = 0; i < d.length; i += 4) sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+          return sum / (d.length / 4);
+        };
+        const w = c.width, h = c.height;
+        resolve({ topRight: lum(w * 0.55, 0, w * 0.44, h * 0.16), topLeft: lum(0, 0, w * 0.3, h * 0.16) });
+      };
+      vv.src = URL.createObjectURL(out);
+    });
 
     // 上传视频模式：只导出这一杆的区间（相机模式是整段），所以区间必须也对
     const segStart = srcDur * 0.25, segEnd = srcDur * 0.75;
@@ -111,7 +139,10 @@ try {
 
     return {
       srcDur, outDur: await durationOf(out), outSize: out.size,
-      outType: out.type, wall,
+      outType: out.type, wall, stamp,
+      progressCount: seen.length,
+      progressMonotonic: seen.every((p, i) => i === 0 || p >= seen[i - 1]),
+      progressEndsAtOne: seen[seen.length - 1] === 1,
       name: ex.exportFileName(92, out.type),
       segSpan: segEnd - segStart, segDur, segSize: seg.size,
       rejected, rejectWall,
@@ -128,10 +159,17 @@ try {
   const segOk = segRatio > 1.8 && segRatio < 3.2 && r.segSize > 1000;
   console.error(`[${segOk ? "ok" : "FAIL"}] 区间导出（上传视频模式）：源区间 ${r.segSpan.toFixed(2)}s → 导出 ${r.segDur.toFixed(2)}s（${segRatio.toFixed(2)}×）`);
 
+  // 源素材是逐帧变色的纯色块，右上角被半透明黑底胶囊压暗才说明水印画上了
+  const marked = r.stamp.topRight < r.stamp.topLeft - 6;
+  console.error(`[${marked ? "ok" : "FAIL"}] 右上角带 App 水印（右上亮度 ${r.stamp.topRight.toFixed(0)} < 左上 ${r.stamp.topLeft.toFixed(0)}）`);
+
+  const prog = r.progressCount >= 3 && r.progressMonotonic && r.progressEndsAtOne;
+  console.error(`[${prog ? "ok" : "FAIL"}] 转码进度实时回报 ${r.progressCount} 次、单调递增、收尾为 100%`);
+
   const failFast = r.rejected && r.rejectWall < 5;
   console.error(`[${failFast ? "ok" : "FAIL"}] play() 被拒时立刻报错收尾（${r.rejectWall.toFixed(1)}s），不会白转圈到超时`);
 
-  ok = slower && r.outSize > 1000 && segOk && failFast;
+  ok = slower && r.outSize > 1000 && segOk && failFast && marked && prog;
 } catch (err) {
   console.error("[FAIL] ", String(err).split("\n")[0]);
 } finally {
