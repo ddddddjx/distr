@@ -7,6 +7,7 @@ import { saveSwing, computeStats, getSwings, clearSwings } from "./store.js";
 import { buildSwingCard, buildWeeklyCard, tierOf, percentileOf, roastOf } from "./shareCard.js";
 import { flag } from "./flags.js";
 import { renderImuBlockHtml } from "./imuReport.js";
+import { decideRecovery, STALL_MS } from "./cameraWatchdog.js";
 
 const APP_VERSION = "0.9.0";
 
@@ -55,6 +56,11 @@ let impactVideoT = null; // 当前挥杆的击球时刻（视频时间轴秒）
 // 视频模式：整段视频中检测到的每次完整挥杆（试挥+正式击球）。
 // 看完全片后只报告最后一次——实拍素材里正式击球几乎总是最后一挥。
 const videoSwings = [];
+// 预览卡死看门狗的观测量（判定逻辑在 cameraWatchdog.js，纯函数可单测）
+let lastFrameAt = 0;    // 最近一次真正拿到新视频帧的时刻
+let resumeTries = 0;    // 本轮卡死已尝试过几次轻量续播
+let reopenTries = 0;    // 本轮卡死已重开过几次摄像头
+let recovering = false; // 恢复流程进行中（异步，避免逐帧重复触发）
 
 /* ---------------- 初始化 ---------------- */
 
@@ -178,6 +184,7 @@ async function openCamera() {
     document.addEventListener("click", () => video.play().catch(() => {}), { once: true });
   }
   detector.lastVideoTime = -1;
+  lastFrameAt = performance.now();
   resizeOverlay();
 }
 
@@ -366,9 +373,18 @@ function resetPerSwing() {
 function loop() {
   state.rafId = requestAnimationFrame(loop);
   const now = performance.now();
+  // 报告弹窗期间不推理：这一杆已经出了报告，分析结果只会被「继续练习」重置；
+  // 顺带避开 iOS 上"回放视频与摄像头预览抢资源"的窗口，也省电
+  if (!$("summaryModal").classList.contains("hidden")) return;
   const lms = detector.detect(video, now);
   // undefined = 视频没有新帧（文件帧率低于渲染帧率），跳过本次分析
-  if (lms !== undefined) {
+  if (lms === undefined) {
+    // 相机模式下持续没有新帧 = 预览被系统冻住，交给看门狗把画面救回来
+    if (state.source === "camera") watchPreview(now);
+  } else {
+    lastFrameAt = now;
+    resumeTries = 0;
+    reopenTries = 0;
     const mirrored = state.source === "camera" && state.facing === "user";
     detector.draw(ctx, lms, mirrored);
     const { phase, liveFaults, summary } = analyzer.update(lms, now);
@@ -396,6 +412,9 @@ function loop() {
           // 基准已作废：全部关键帧重来，重新等待就位
           keyframes.clear();
           baselineAnnounced = false;
+          // 这一段录制跟着作废。留着不丢会让 startRecorder early-return，
+          // 之后每一杆的回放都还是这段从未收束的旧录像
+          discardRecorder();
         } else {
           for (const k of ["top", "impact", "finish"]) keyframes.delete(k);
         }
@@ -446,13 +465,77 @@ function loop() {
     }
   }
 
-  // FPS 统计
-  state.frames++;
+  // FPS 统计：只计真正完成推理的帧。rAF 空转不能显示成 60 FPS——
+  // 预览冻住时面板若还是一片"正常"，只会把问题藏起来
+  if (lms !== undefined) state.frames++;
   if (now - state.fpsT0 > 1000) {
     $("fpsLabel").textContent = state.frames + " FPS";
     state.frames = 0;
     state.fpsT0 = now;
   }
+}
+
+/* ---------------- 摄像头预览保活 ---------------- */
+
+/** 主循环连续拿不到新帧时调用：交给纯函数判定该不该救、怎么救 */
+function watchPreview(now) {
+  const track = state.stream?.getVideoTracks?.()[0] || null;
+  const action = decideRecovery({
+    now,
+    lastFrameAt,
+    source: state.source,
+    running: state.running,
+    recovering,
+    resumeTries,
+    reopenTries,
+    trackState: track ? track.readyState : "none",
+    trackMuted: !!track?.muted,
+  });
+  if (action !== "none") recoverPreview(action);
+}
+
+/**
+ * 把冻住的摄像头预览救回来。
+ * resume：轨道还活着，只是 <video> 被系统暂停（iOS 播完报告回放后的常态）→ 续播；
+ * reopen：轨道已被系统中断/回收，或续播一次仍无新帧 → 重新申请摄像头。
+ * 画面断过之后旧基准不再可信，reopen 时连同这一杆的中间状态一起作废。
+ */
+async function recoverPreview(action) {
+  recovering = true;
+  try {
+    if (action === "stop") {
+      stopAnalysis();
+      showHint("摄像头画面已中断且无法恢复：请检查相机权限、关闭占用相机的其他应用后重新开始分析", 10000);
+      return;
+    }
+    if (action === "resume") {
+      resumeTries++;
+      await resumePreview();
+    } else {
+      resumeTries = 0;
+      reopenTries++;
+      await openCamera();
+      analyzer.nextSwing();
+      resetPerSwing();
+      discardRecorder();
+      showHint("摄像头画面已恢复，请重新摆好准备姿势再挥杆", 4000);
+    }
+  } catch (err) {
+    showHint(cameraErrorMessage(err), 8000);
+  } finally {
+    // 无论成败都重新计时：再卡 STALL_MS 才会升级到下一级恢复手段
+    lastFrameAt = performance.now();
+    recovering = false;
+  }
+}
+
+/** 轻量续播：接回 srcObject 并让 detect() 重新接受下一帧 */
+function resumePreview() {
+  if (state.source !== "camera" || !state.stream) return Promise.resolve();
+  if (video.srcObject !== state.stream) video.srcObject = state.stream;
+  detector.lastVideoTime = -1;
+  lastFrameAt = performance.now();
+  return video.play().catch(() => {});
 }
 
 /* ---------------- 分析启停 ---------------- */
@@ -474,6 +557,9 @@ async function startAnalysis() {
   cleanupReplay();
   coach.unlock(); // 借用户点击手势解锁 iOS 语音
   state.running = true;
+  lastFrameAt = performance.now();
+  resumeTries = 0;
+  reopenTries = 0;
   const btn = $("startBtn");
   btn.textContent = "停止分析";
   btn.classList.add("stop");
@@ -488,6 +574,8 @@ async function startAnalysis() {
     await video.play();
     showHint("正在分析视频…", 2500);
   } else {
+    // 上一轮若因系统中断停在冻结画面上，这里先把预览接回来再开跑
+    resumePreview();
     showHint("摆好准备姿势并静止 1 秒，开始你的挥杆", 4000);
   }
   loop();
@@ -658,9 +746,12 @@ function startRecorder() {
       MediaRecorder.isTypeSupported(t)
     ) || "";
   try {
-    recChunks = [];
+    // 分片数组每段录制一份：onstop 是异步的，收尾期间下一杆可能已经开录，
+    // 共用同一个数组会让两段互相吞掉分片
+    const chunks = [];
+    recChunks = chunks;
     recorder = new MediaRecorder(state.stream, mime ? { mimeType: mime } : undefined);
-    recorder.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
     recorder.start();
   } catch {
     recorder = null;
@@ -671,10 +762,11 @@ function startRecorder() {
 function stopRecorderToReplay() {
   if (!recorder || recorder.state === "inactive") { recorder = null; return; }
   const mimeType = recorder.mimeType;
+  const chunks = recChunks; // 交接本段分片，后续录制用新数组
+  recChunks = [];
   recorder.onstop = () => {
     if (replayUrl) URL.revokeObjectURL(replayUrl);
-    const blob = new Blob(recChunks, { type: mimeType || recChunks[0]?.type || "video/webm" });
-    recChunks = [];
+    const blob = new Blob(chunks, { type: mimeType || chunks[0]?.type || "video/webm" });
     if (!blob.size) return;
     replayUrl = URL.createObjectURL(blob);
     const rv = $("replayVideo");
@@ -794,9 +886,12 @@ $("startBtn").addEventListener("click", () => {
       showSummary(summary); // 内部会先取走录制的回放，再停止
       stopAnalysis();
     } else {
+      const stalled = performance.now() - lastFrameAt > STALL_MS;
       stopAnalysis();
       showHint(
-        "本次未检测到完整挥杆。提示：摆好准备姿势静止 1 秒再挥杆，收杆后保持姿势片刻，报告会自动弹出",
+        stalled
+          ? "摄像头画面没有更新，这段时间没能分析任何动作：请重新点「开始分析」，若仍无画面请刷新页面"
+          : "本次未检测到完整挥杆。提示：摆好准备姿势静止 1 秒再挥杆，收杆后保持姿势片刻，报告会自动弹出",
         6000
       );
     }
@@ -812,8 +907,15 @@ $("closeSummary").addEventListener("click", () => {
   resetPerSwing();
   videoSwings.length = 0;
   cleanupReplay();
-  if (state.running && state.source === "camera")
+  if (state.running && state.source === "camera") {
+    // 报告里的慢放回放在 iOS 上会把摄像头预览挤停（元素被暂停、甚至采集
+    // 轨道被中断）。不主动接回来，detect() 就再也拿不到新帧——"第一杆有
+    // 报告、之后怎么挥都识别不到"正是这么来的。看门狗是第二道防线。
+    resumePreview();
+    resumeTries = 0;
+    reopenTries = 0;
     showHint("摆好准备姿势，开始下一次挥杆", 3000);
+  }
 });
 
 /* ---------- 高光时刻：分数动画 / 彩带 / 今日战绩 ---------- */
