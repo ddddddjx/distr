@@ -127,12 +127,28 @@ try {
     `${type.body.lh} / ${type.body.fs}px`);
 
   // —— 堆叠层级 ——
+  // 直接驱动 DOM 到"叠了一层"的状态，不点按钮：点击要等 app.js 这个 ES module
+  // 连着 vendor 大包 import 完才注册得上监听，慢且不稳。这条断言要守的是
+  // CSS 契约（父层后退压暗 + 上层遮罩更轻），驱动方式不影响它的有效性。
   await page.evaluate(() => {
     document.getElementById("chooser").classList.remove("hidden");
-    document.getElementById("aboutLink").click();
+    const a = document.getElementById("aboutModal");
+    document.getElementById("chooser").classList.add("pushed");
+    a.classList.add("stacked");
+    a.classList.remove("hidden");
   });
-  // 等入场动画跑完再读计算样式，否则读到的是动画首帧（动画会压过普通声明）
-  await page.waitForTimeout(600);
+  // 轮询真实数值，别用固定 sleep 赌。注意不能等 animationName === "none"：
+  // 那是声明值，动画跑完它照样返回动画名，条件永远不成立。
+  await page.waitForFunction(() => {
+    const cc = document.querySelector("#chooser .modal-card");
+    const a = document.getElementById("aboutModal");
+    if (!cc) return false;
+    const running = document.getAnimations().some((an) => an.playState === "running");
+    const f = parseFloat(getComputedStyle(cc).filter.match(/[\d.]+/)?.[0] ?? "1");
+    const bg = getComputedStyle(a).backgroundColor;
+    const alpha = parseFloat(bg.match(/rgba?\(([^)]+)\)/)?.[1].split(",")[3] ?? "1");
+    return !running && f < 0.99 && alpha > 0;
+  }, { timeout: 15000 });
   const stack = await page.evaluate(() => {
     const parent = document.getElementById("chooser");
     const child = document.getElementById("aboutModal");
@@ -147,12 +163,38 @@ try {
     };
   });
   const alphaOf = (c) => { const m = c.match(/rgba?\(([^)]+)\)/); return m ? parseFloat(m[1].split(",")[3] ?? "1") : 1; };
+  // 断言要取数值，不能只判 "!== none"——brightness(1) 也不是 none，会白白放过退化
+  const brightness = parseFloat(stack.parentFilter.match(/[\d.]+/)?.[0] ?? "1");
+  const scaleOf = parseFloat(stack.parentTransform.match(/matrix\(([\d.]+)/)?.[1] ?? "1");
   check("堆叠时父层后退并压暗（不是再糊一层黑）",
-    stack.parentPushed && stack.parentTransform !== "none" && stack.parentFilter !== "none",
-    `${stack.parentTransform} ${stack.parentFilter}`);
+    stack.parentPushed && scaleOf < 0.99 && brightness < 0.99,
+    `scale ${scaleOf} · brightness ${brightness}`);
+  const childA = alphaOf(stack.childScrim), parentA = alphaOf(stack.parentScrim);
   check("上层遮罩相应减轻（避免双重压暗）",
-    stack.childStacked && alphaOf(stack.childScrim) < alphaOf(stack.parentScrim),
-    `上层 ${alphaOf(stack.childScrim)} < 下层 ${alphaOf(stack.parentScrim)}`);
+    stack.childStacked && childA > 0 && childA < parentA,
+    `上层 ${childA} < 下层 ${parentA}`);
+
+  // —— 动效机会（find-animation-opportunities 的产出）——
+  const motion = await page.evaluate(async () => {
+    const hint = document.getElementById("hint");
+    const cs0 = getComputedStyle(hint);
+    const before = { op: cs0.opacity, hasTransition: parseFloat(cs0.transitionDuration) > 0 };
+    hint.classList.add("visible");
+    await new Promise((r) => setTimeout(r, 300));
+    const after = getComputedStyle(hint).opacity;
+    hint.classList.remove("visible");
+    // 关键帧错峰：注入 4 个 .kf 看延迟是否递增
+    const wrap = document.getElementById("keyframesWrap");
+    wrap.classList.remove("hidden");
+    wrap.innerHTML = "<figure class='kf'></figure>".repeat(4);
+    const delays = [...wrap.children].map((el) => getComputedStyle(el).animationDelay);
+    return { before, after, delays };
+  });
+  check("提示条进出有过渡（31 处调用，原来出现和消失都是硬切）",
+    motion.before.hasTransition && motion.before.op === "0" && motion.after === "1",
+    `${motion.before.op} → ${motion.after}`);
+  check("关键帧四宫格错峰入场（30–80ms 间隔）",
+    motion.delays.join() === "0s,0.04s,0.08s,0.12s", motion.delays.join(" "));
 
   await ctx.close();
 
@@ -166,12 +208,19 @@ try {
     return {
       btnDur: getComputedStyle(btn).transitionDuration,
       guideAnim: guide ? getComputedStyle(guide).animationName : "none",
+      kfDelay: (() => {
+        const w = document.getElementById("keyframesWrap");
+        w.classList.remove("hidden");
+        w.innerHTML = "<figure class='kf'></figure>".repeat(4);
+        return getComputedStyle(w.children[3]).animationDelay;
+      })(),
       confettiHidden: document.getElementById("confetti").classList.contains("hidden"),
     };
   });
   const durOk = rm.btnDur.split(",").every((d) => parseFloat(d) <= 0.13);
   check("减弱动态：过渡被压到 ≤0.12s（保留反馈，去掉观感位移）", durOk, rm.btnDur);
   check("减弱动态：引导框呼吸循环已停", rm.guideAnim === "none", rm.guideAnim);
+  check("减弱动态：错峰延迟清零（否则元素会「迟到」）", parseFloat(rm.kfDelay) === 0, rm.kfDelay);
   await ctx2.close();
 } catch (err) {
   console.error("[FAIL] ", String(err).split("\n")[0]);
