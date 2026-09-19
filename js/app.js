@@ -977,7 +977,12 @@ function animateScore(el, target) {
   })();
 }
 
+/** 系统开启「减弱动态效果」时不放彩带：纯装饰，且是全屏大范围运动 */
+const prefersReducedMotion = () =>
+  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+
 function celebrate() {
+  if (prefersReducedMotion()) return;
   const c = $("confetti");
   c.width = innerWidth;
   c.height = innerHeight;

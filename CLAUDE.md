@@ -85,6 +85,26 @@ getUserMedia 压根没要音轨，真开了只会啸叫。顶栏已有一个 �
 或非用户手势的自动播放被拒，既不报错也不出帧，结果就是一片纯黑。铺一张本次挥杆的真实关键帧当 poster，
 并在 1.5s 后仍未出帧时打开原生 `controls`，让用户一点即可播放。
 
+## 移动端原生手感基线（勿回退）
+
+依据 [emilkowalski/skills](https://github.com/emilkowalski/skills) 的 mobile-native 与
+review-animations 标准。这些是"一个网页"与"一个 App"的分界线，回退了手机上立刻现原形：
+
+- **`viewport-fit=cover` 是 `env(safe-area-inset-*)` 生效的前提**。缺了它，样式里所有安全区
+  padding 恒为 `0px`——写了等于没写（本项目曾经就是这样：4 处 env() 全部失效）。
+- **绝不禁用缩放**：`user-scalable=no` / `maximum-scale=1` 是无障碍缺陷。本页没有输入框，
+  不存在 iOS 聚焦输入自动放大的问题，本来也没有禁用的理由。
+- 可点元素必须有 `touch-action: manipulation`（否则 iOS 等 ~300ms 判双击，点起来慢半拍）
+  与 `user-select: none`（否则长按选中文字/弹复制菜单）。`user-select: none` **只给控件**，
+  绝不给 body——报告正文与错误信息用户要能复制。
+- 每个可点元素都要有 `:active` 按压反馈（`scale(0.96~0.97)`，100–160ms）。原生按钮是手指
+  按下的瞬间就响应；只在 click 上给反馈，即使 0ms 也会被读成"卡"。
+- 动效曲线：进场/离场与按压用 `--ease-out`（强 ease-out），**绝不 `ease-in`**；
+  只动 `transform`/`opacity`/颜色，**不写 `transition: all`**（会连 layout/paint 属性一起动）。
+- `prefers-reduced-motion: reduce` 要降级：去掉位移/缩放与无限循环呼吸，保留透明度与颜色
+  （减弱动态 ≠ 没有反馈）；彩带这类纯装饰直接不放（`celebrate()` 里也判断）。
+- 回归见 `tests/mobile-polish.mjs`。注意**安全区的实际数值只有真机能验**，测试只验前提条件。
+
 ## 分析器关键设计（改动前必读）
 
 踩坑沉淀，勿轻易回退：
@@ -122,6 +142,9 @@ getUserMedia 压根没要音轨，真开了只会啸叫。顶栏已有一个 �
 - `node tests/replay-export.mjs`：慢放导出回归（canvas 合成素材 → `renderSlowMotion`）。断言：
   产出时长 ≈ 源 ÷ 倍速、区间导出（上传视频模式）同样成立、右上角水印把画面压暗、
   进度回调单调递增且收尾 100%、`play()` 被拒时秒级报错不挂到超时。需要浏览器，不进 CI 门禁。
+- `node tests/mobile-polish.mjs`：移动端原生手感基线回归（viewport-fit / 未禁缩放 /
+  touch-action / user-select / text-size-adjust / overscroll / 无 transition:all /
+  :active 覆盖面 / 393px 无横向溢出 / 减弱动态降级）。需要浏览器。
 - `node tests/video-sound.mjs`：上传视频原声开关回归（相机模式恒静音且不显示按钮、
   点击真的解除 `<video>` 静音并写入 localStorage、393px 顶栏放得下不挤掉 FPS）。需要浏览器。
 - `node tests/preview-stall.mjs`：实时模式预览卡死恢复回归（假摄像头启动分析 → 暂停预览元素 /
