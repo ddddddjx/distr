@@ -21,6 +21,7 @@ const state = {
   source: "camera",      // "camera" 实时相机 | "file" 上传的视频
   facing: "environment", // 默认后置镜头（由他人帮拍）
   view: "front",
+  sound: false,          // 上传视频是否放原声（记忆在 localStorage，见 SOUND_KEY）
   handedness: "right",
   stream: null,
   fileUrl: null,
@@ -28,6 +29,11 @@ const state = {
   frames: 0,
   fpsT0: performance.now(),
 };
+
+// 视频原声开关的持久化键。相机模式恒定静音：getUserMedia 没要音轨，
+// 真开了也只会造成啸叫；这个开关只服务"上传视频"。
+const SOUND_KEY = "videoSound.v1";
+try { state.sound = localStorage.getItem(SOUND_KEY) === "1"; } catch (e) { /* 隐私模式 */ }
 
 const detector = new PoseDetector();
 const coach = new VoiceCoach();
@@ -171,6 +177,7 @@ async function openCamera() {
   state.stream = stream;
 
   video.srcObject = state.stream;
+  applyVideoSound(); // 相机模式恒定静音 + 隐藏原声按钮
   video.classList.toggle("mirrored", state.facing === "user");
   if (video.readyState < 1) {
     await withTimeout(
@@ -232,6 +239,25 @@ if ("ResizeObserver" in window) {
   chromeRO.observe($("controls"));
 }
 
+/** 把原声开关落到 video 元素与顶栏按钮上。相机模式恒定静音且不显示按钮。 */
+function applyVideoSound() {
+  const isFile = state.source === "file";
+  video.muted = !(isFile && state.sound);
+  const btn = $("soundBtn");
+  btn.classList.toggle("hidden", !isFile);
+  btn.classList.toggle("off", !state.sound);
+  btn.textContent = state.sound ? "原声" : "静音";
+}
+
+$("soundBtn").addEventListener("click", () => {
+  state.sound = !state.sound;
+  try { localStorage.setItem(SOUND_KEY, state.sound ? "1" : "0"); } catch (e) { /* 隐私模式 */ }
+  applyVideoSound();
+  // 解除静音必须借用户手势（这次点击就是），否则 iOS 会直接把视频暂停
+  if (state.sound && state.source === "file" && state.running) video.play().catch(() => {});
+  showHint(state.sound ? "已开启视频原声" : "已静音视频原声", 2000);
+});
+
 /* ---------------- 视频文件模式 ---------------- */
 
 async function enterFileMode(file) {
@@ -247,6 +273,7 @@ async function enterFileMode(file) {
   $("stage").classList.add("file-mode");
   updateChromeInsets();
   $("flipBtn").textContent = "返回相机";
+  applyVideoSound();
   await new Promise((res) => (video.onloadedmetadata = res));
   resizeOverlay();
   showHint(
@@ -268,6 +295,7 @@ async function exitFileMode() {
     await openCamera();
     showHint(hintForView(), 3000);
   } catch (err) {
+    applyVideoSound(); // 开相机失败也要收起原声按钮
     showHint(cameraErrorMessage(err), 5000);
   }
 }
@@ -574,8 +602,22 @@ async function startAnalysis() {
     detector.lastVideoTime = -1;
     // 开播前先推理一次：任何残余的首帧开销都不该让视频内容白白流过去
     await detector.prime(video);
-    await video.play();
-    showHint("正在分析视频…", 2500);
+    try {
+      await video.play();
+      showHint("正在分析视频…", 2500);
+    } catch (err) {
+      // 带声音的播放更容易被自动播放策略拦下（prime() 的 await 可能已经把
+      // 用户手势耗掉了）。原来这行没有 try：一旦被拒，startAnalysis 直接抛出，
+      // 末尾的 loop() 再也跑不到——按钮显示"停止分析"却一帧都不分析。
+      if (!video.muted) {
+        state.sound = false;   // 只改当前会话，不覆盖用户的持久化偏好
+        applyVideoSound();
+        await video.play().catch(() => {});
+        showHint("浏览器拦截了带声音的播放，已静音播放。点顶栏「原声」可再开", 6000);
+      } else {
+        showHint("视频无法自动播放，请点一下画面再试", 5000);
+      }
+    }
   } else {
     // 上一轮若因系统中断停在冻结画面上，这里先把预览接回来再开跑
     resumePreview();

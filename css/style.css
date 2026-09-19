@@ -130,6 +130,12 @@ button { font-family: var(--font); }
 }
 .icon-btn:active { opacity: 0.6; }
 .icon-btn.off { opacity: 0.4; }
+/* 文字型药丸按钮：顶栏已有一个 🔊（语音指导），视频原声再放个喇叭图标
+   必然混淆，所以直接写字。只在上传视频模式出现。 */
+.icon-btn.pill-btn {
+  width: auto; height: 26px; padding: 0 10px; border-radius: 13px;
+  font-size: var(--fs-caption2); letter-spacing: -0.2px; white-space: nowrap;
+}
 .fps {
   font-size: var(--fs-caption2); font-variant-numeric: tabular-nums;
   color: var(--label-3); min-width: 44px; text-align: right;
